@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RPA Klassmatt MODEC — Documentacao</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #e8e8e8;
+    color: #1a1a2e;
+  }
+
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    background: #fff;
+    margin: 20px auto;
+    padding: 14mm 14mm 12mm;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+    page-break-after: always;
+  }
+
+  /* ─── HEADER ─── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 3px solid #003366;
+    padding-bottom: 8px;
+    margin-bottom: 14px;
+  }
+  .header-title h1 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #003366;
+    letter-spacing: .3px;
+  }
+  .header-title p {
+    font-size: 11px;
+    color: #666;
+    margin-top: 2px;
+  }
+  .badge {
+    background: #003366;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 20px;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+  }
+
+  /* ─── SECTION TITLE ─── */
+  .section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #003366;
+    margin: 14px 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #ccd6e0;
+  }
+
+  /* ─── SUBTITULO ─── */
+  h3 {
+    font-size: 12px;
+    font-weight: 700;
+    color: #003366;
+    margin: 10px 0 5px;
+  }
+
+  /* ─── TEXTOS ─── */
+  p {
+    font-size: 11px;
+    line-height: 1.5;
+    margin-bottom: 6px;
+    color: #333;
+  }
+
+  ul, ol {
+    margin: 4px 0 8px 16px;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  li {
+    margin-bottom: 3px;
+    color: #333;
+  }
+
+  strong { font-weight: 700; }
+
+  /* ─── TABELAS ─── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+    margin: 6px 0 10px;
+    page-break-inside: avoid;
+  }
+
+  thead th {
+    background: #003366;
+    color: #fff;
+    padding: 5px 8px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .3px;
+  }
+
+  tbody td {
+    padding: 4px 8px;
+    border-bottom: 1px solid #eee;
+  }
+
+  tbody tr:nth-child(even) td {
+    background: #f7f9fc;
+  }
+
+  .mono {
+    font-family: 'Courier New', monospace;
+    color: #003366;
+    font-size: 10.5px;
+  }
+
+  /* ─── CODIGO ─── */
+  pre {
+    background: #1a1a2e;
+    color: #d4d4d4;
+    font-family: 'Courier New', Consolas, monospace;
+    font-size: 10px;
+    line-height: 1.6;
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin: 6px 0 10px;
+    page-break-inside: avoid;
+    border-left: 3px solid #003366;
+  }
+
+  p code, li code, td code {
+    font-family: 'Courier New', monospace;
+    background: #eef2f7;
+    color: #003366;
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 10px;
+  }
+
+  /* ─── INFO BOX ─── */
+  .info-box {
+    background: #f0f4ff;
+    border: 1.5px solid #4285f4;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 6px 0 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    page-break-inside: avoid;
+  }
+
+  .info-box strong {
+    color: #003366;
+  }
+
+  /* ─── WORKFLOW ─── */
+  .workflow-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+    margin: 6px 0 10px;
+  }
+
+  .wf-step {
+    border: 1.5px solid #ddd;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 10.5px;
+    line-height: 1.4;
+    background: #fafafa;
+    position: relative;
+  }
+
+  .wf-step .num {
+    position: absolute;
+    top: -7px;
+    left: 8px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #003366;
+    color: #fff;
+    font-size: 7px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wf-step .title {
+    font-weight: 700;
+    font-size: 10.5px;
+    margin-top: 3px;
+    margin-bottom: 2px;
+    color: #1a1a2e;
+  }
+
+  .wf-step.blue   { border-color: #4285f4; background: #f0f4ff; }
+  .wf-step.green  { border-color: #34a853; background: #f0faf2; }
+  .wf-step.orange { border-color: #fb8c00; background: #fff8f0; }
+
+  .wf-step.blue .num   { background: #4285f4; }
+  .wf-step.green .num  { background: #34a853; }
+  .wf-step.orange .num { background: #fb8c00; }
+
+  /* ─── STATUS ─── */
+  .status-row {
+    display: flex;
+    gap: 10px;
+    margin: 4px 0 10px;
+  }
+
+  .status-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #444;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+  }
+
+  /* ─── TREE ─── */
+  .tree {
+    background: #f7f9fc;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: 'Courier New', Consolas, monospace;
+    font-size: 9.5px;
+    line-height: 1.8;
+    color: #333;
+    margin: 6px 0 10px;
+    page-break-inside: avoid;
+  }
+
+  .tree .c { color: #888; }
+  .tree .f { color: #003366; font-weight: 700; }
+
+  /* ─── FOOTER ─── */
+  .footer {
+    border-top: 1px solid #ddd;
+    padding-top: 6px;
+    margin-top: 12px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: #999;
+  }
+
+  /* ─── PRINT ─── */
+  @media print {
+    body { background: #fff; }
+    .page { margin: 0; box-shadow: none; }
+  }
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════ PAGE 1 ══════════════════════════════════════════ -->
+<div class="page">
+
+  <div class="header">
+    <div class="header-title">
+      <h1>RPA Klassmatt MODEC — Documentacao Tecnica</h1>
+      <p>Python + Playwright &nbsp;|&nbsp; Migrado do Power Automate Desktop &nbsp;|&nbsp; Cadastro em massa de itens</p>
+    </div>
+    <div class="badge">MODEC</div>
+  </div>
+
+  <!-- FUNCIONALIDADES -->
+  <div class="section-title">Funcionalidades</div>
+  <ul>
+    <li>Cadastro automatizado de itens a partir de uma planilha Excel</li>
+    <li><strong>Retomada automatica</strong> — progresso salvo por SIN em <code>progress.json</code></li>
+    <li><strong>Retry com backoff</strong> — ate 3 tentativas por item com recuperacao de erro</li>
+    <li>Deteccao de sessao expirada com pausa para login manual</li>
+  </ul>
+
+  <!-- WORKFLOW -->
+  <div class="section-title">Workflow de 12 etapas por item</div>
+
+  <div class="workflow-grid">
+    <div class="wf-step blue">
+      <div class="num">1</div>
+      <div class="title">Buscar SIN na worklist</div>
+    </div>
+    <div class="wf-step blue">
+      <div class="num">2</div>
+      <div class="title">Atuar no item</div>
+    </div>
+    <div class="wf-step blue">
+      <div class="num">3</div>
+      <div class="title">Criar item (Finalizar → Salvar → Sim)</div>
+    </div>
+    <div class="wf-step orange">
+      <div class="num">4</div>
+      <div class="title">Classificacao UNSPSC</div>
+    </div>
+    <div class="wf-step green">
+      <div class="num">5</div>
+      <div class="title">Dados fiscais (NCM)</div>
+    </div>
+    <div class="wf-step green">
+      <div class="num">6</div>
+      <div class="title">Referencias (Empresa + Part Number)</div>
+    </div>
+    <div class="wf-step orange">
+      <div class="num">7</div>
+      <div class="title">Relacionamento (Codigo Antigo)</div>
+    </div>
+    <div class="wf-step blue">
+      <div class="num">8</div>
+      <div class="title">Upload de documentos</div>
+    </div>
+    <div class="wf-step orange">
+      <div class="num">9</div>
+      <div class="title">Validacao da descricao SAP (40 chars / Exibe D2)</div>
+    </div>
+    <div class="wf-step blue">
+      <div class="num">10</div>
+      <div class="title">Alteracao de PDM</div>
+    </div>
+    <div class="wf-step orange">
+      <div class="num">11</div>
+      <div class="title">Preenchimento de atributos tecnicos (ate 30)</div>
+    </div>
+    <div class="wf-step green">
+      <div class="num">12</div>
+      <div class="title">Finalizar e remeter para MODEC</div>
+    </div>
+  </div>
+
+  <!-- TRACKING -->
+  <h3>Tracking visual no Excel</h3>
+  <div class="status-row">
+    <div class="status-item"><div class="status-dot" style="background:#34a853"></div> <strong>Verde</strong> — sucesso</div>
+    <div class="status-item"><div class="status-dot" style="background:#ea4335"></div> <strong>Vermelho</strong> — erro</div>
+    <div class="status-item"><div class="status-dot" style="background:#fb8c00"></div> <strong>Laranja</strong> — referencia duplicada</div>
+  </div>
+
+  <!-- PRE-REQUISITOS -->
+  <div class="section-title">Pre-requisitos</div>
+  <ul>
+    <li>Python 3.10+</li>
+    <li>Google Chrome instalado</li>
+    <li>Acesso ao sistema Klassmatt MODEC</li>
+  </ul>
+
+  <!-- INSTALACAO -->
+  <div class="section-title">Instalacao</div>
+  <pre>cd klassmatt_rpa
+pip install -r requirements.txt
+python -m playwright install chromium</pre>
+
+  <h3>Dependencias</h3>
+  <table>
+    <thead>
+      <tr><th>Pacote</th><th>Uso</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>playwright</code></td><td>Automacao do navegador</td></tr>
+      <tr><td><code>openpyxl</code></td><td>Leitura/escrita do Excel</td></tr>
+      <tr><td><code>python-dotenv</code></td><td>Variaveis de ambiente (.env)</td></tr>
+    </tbody>
+  </table>
+
+  <!-- CONFIGURACAO -->
+  <div class="section-title">Configuracao</div>
+  <p>Crie um arquivo <code>.env</code> na pasta <code>klassmatt_rpa/</code> (opcional — ha valores padrao em <code>config.py</code>):</p>
+  <pre>EXCEL_PATH=C:\caminho\para\planilha.xlsx
+DOCUMENTS_DIR=C:\caminho\para\documentos
+PROFILE_DIR=C:\caminho\para\perfil_playwright
+KLASSMATT_HOME=https://modec.klassmatt.com.br/MenuPrincipal.aspx</pre>
+
+  <h3>Planilha Excel</h3>
+  <p>A planilha deve conter as seguintes colunas (configuraveis em <code>config.py</code>):</p>
+  <table>
+    <thead>
+      <tr><th>Coluna</th><th>Descricao</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>SIN</code></td><td>Identificador do item</td></tr>
+      <tr><td><code>NCM</code></td><td>Codigo fiscal NCM</td></tr>
+      <tr><td><code>Empresa</code></td><td>Empresa para referencia</td></tr>
+      <tr><td><code>Part Number</code></td><td>Numero da peca</td></tr>
+      <tr><td><code>UNSPSC</code></td><td>Classificacao UNSPSC</td></tr>
+      <tr><td><code>Codigo 60</code></td><td>Codigo antigo (relacionamento)</td></tr>
+      <tr><td><code>Documento</code></td><td>Nome(s) do(s) arquivo(s) a anexar</td></tr>
+      <tr><td><code>PDM</code></td><td>Categoria PDM</td></tr>
+      <tr><td><code>Atrib_1_Valor</code> ... <code>Atrib_30_Valor</code></td><td>Atributos tecnicos</td></tr>
+    </tbody>
+  </table>
+
+  <div class="footer">
+    <span>RPA — Klassmatt MODEC &nbsp;|&nbsp; Python + Playwright</span>
+    <span>Pagina 1 / 2</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════ PAGE 2 ══════════════════════════════════════════ -->
+<div class="page">
+
+  <div class="header">
+    <div class="header-title">
+      <h1>RPA Klassmatt MODEC — Documentacao Tecnica</h1>
+      <p>Execucao · Estrutura do Projeto · Logs · Tratamento de Erros</p>
+    </div>
+    <div class="badge">MODEC</div>
+  </div>
+
+  <!-- EXECUCAO -->
+  <div class="section-title">Execucao</div>
+  <pre>cd klassmatt_rpa
+python main.py</pre>
+
+  <div class="info-box">
+    <strong>Primeiro uso:</strong> Na primeira execucao, o navegador abrira e sera necessario fazer login manualmente no Klassmatt. O perfil do navegador e salvo em <code>./playwright_profile/</code>, preservando a sessao para as proximas execucoes.
+  </div>
+
+  <div class="info-box">
+    <strong>Retomada:</strong> Se o processo for interrompido, basta executar novamente. O bot le o <code>progress.json</code> e pula automaticamente os itens ja processados com sucesso.
+  </div>
+
+  <!-- ESTRUTURA -->
+  <div class="section-title">Estrutura do Projeto</div>
+  <div class="tree">
+    <span class="f">klassmatt_rpa/</span><br>
+    ├── main.py <span class="c"># Orquestrador principal</span><br>
+    ├── config.py <span class="c"># Configuracoes, caminhos, seletores</span><br>
+    ├── browser.py <span class="c"># Setup do Playwright e helpers</span><br>
+    ├── excel_handler.py <span class="c"># Leitura do Excel e coloracao de linhas</span><br>
+    ├── state.py <span class="c"># Controle de progresso (progress.json)</span><br>
+    ├── logger.py <span class="c"># Logging (arquivo + console)</span><br>
+    ├── requirements.txt <span class="c"># Dependencias Python</span><br>
+    ├── <span class="f">pages/</span> <span class="c"># Page Objects (um por secao do formulario)</span><br>
+    │&nbsp;&nbsp; ├── worklist.py <span class="c"># Navegacao e filtro da worklist</span><br>
+    │&nbsp;&nbsp; ├── item.py <span class="c"># Busca SIN, criar, finalizar, remeter</span><br>
+    │&nbsp;&nbsp; ├── classifications.py <span class="c"># Popup de classificacao UNSPSC</span><br>
+    │&nbsp;&nbsp; ├── fiscal.py <span class="c"># Dados fiscais (NCM)</span><br>
+    │&nbsp;&nbsp; ├── references.py <span class="c"># Referencias (empresa + part number)</span><br>
+    │&nbsp;&nbsp; ├── relationships.py <span class="c"># Relacionamentos (codigo antigo)</span><br>
+    │&nbsp;&nbsp; ├── media.py <span class="c"># Upload de documentos</span><br>
+    │&nbsp;&nbsp; ├── descriptions.py <span class="c"># Validacao descricao SAP + PDM</span><br>
+    │&nbsp;&nbsp; └── attributes.py <span class="c"># Atributos tecnicos (ate 30)</span><br>
+    ├── progress.json <span class="c"># Estado de progresso (gerado em runtime)</span><br>
+    └── klassmatt_rpa.log <span class="c"># Log detalhado (gerado em runtime)</span>
+  </div>
+
+  <!-- LOGS -->
+  <div class="section-title">Logs</div>
+  <table>
+    <thead>
+      <tr><th>Destino</th><th>Nivel</th><th>Uso</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Console</td><td><span class="mono">INFO</span></td><td>Acompanhamento em tempo real</td></tr>
+      <tr><td><code>klassmatt_rpa.log</code></td><td><span class="mono">DEBUG</span></td><td>Diagnostico completo</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ERROS -->
+  <div class="section-title">Tratamento de Erros</div>
+  <ul>
+    <li>Cada item e tentado ate <strong>3 vezes</strong> com backoff linear</li>
+    <li>Em caso de falha, o bot tenta navegar de volta a worklist</li>
+    <li>Se a navegacao falhar, uma nova aba e criada como fallback</li>
+    <li>Referencias duplicadas sao tratadas separadamente (pintadas de laranja e puladas)</li>
+    <li>Itens com documentos faltantes sao pulados antes do processamento</li>
+  </ul>
+
+  <div class="footer">
+    <span>RPA — Klassmatt MODEC &nbsp;|&nbsp; Python + Playwright</span>
+    <span>Pagina 2 / 2</span>
+  </div>
+</div>
+
+</body>
+</html>

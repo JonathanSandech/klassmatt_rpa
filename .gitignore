@@ -1,0 +1,9 @@
+# Ambiente
+.env
+playwright_profile/
+
+# Runtime
+progress.json
+klassmatt_rpa.log
+__pycache__/
+*.pyc
