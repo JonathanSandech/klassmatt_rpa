@@ -35,11 +35,14 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
             media_page = p
             break
 
-    for doc_name in doc_files:
-        doc_path = DOCUMENTS_DIR / doc_name
+    for doc_entry in doc_files:
+        doc_path = Path(doc_entry)
+        if not doc_path.is_absolute():
+            doc_path = DOCUMENTS_DIR / doc_entry
         if not doc_path.exists():
             log.warning(f"Documento não encontrado, pulando: {doc_path}")
             continue
+        doc_name = doc_path.stem
 
         log.debug(f"Uploading: {doc_name}")
 

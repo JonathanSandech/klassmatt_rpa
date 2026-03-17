@@ -15,20 +15,11 @@ async def navigate_to_worklist(page: Page) -> None:
     await safe_click(page, SELECTORS["worklist_link"])
     await page.wait_for_load_state("networkidle")
 
-    # Abrir dropdown de filtro e selecionar "Todas as Solicitações"
-    await safe_click(page, SELECTORS["worklist_filter_dropdown"])
-    await page.wait_for_timeout(500)
-
-    # Preencher busca no dropdown
-    search_input = page.locator(SELECTORS["worklist_filter_search"])
-    await search_input.fill("Todas as Solicitações")
-    await page.wait_for_timeout(1000)
-
-    # Selecionar opção (3x Down + Enter, como no PAD)
-    await page.keyboard.press("ArrowDown")
-    await page.keyboard.press("ArrowDown")
-    await page.keyboard.press("ArrowDown")
-    await page.keyboard.press("Enter")
+    # Selecionar "Todas as Solicitações" no dropdown nativo
+    await page.select_option(
+        SELECTORS["worklist_filter_dropdown"],
+        label="Todas as Solicitações",
+    )
 
     await page.wait_for_load_state("networkidle")
     log.info("Worklist filtrada: Todas as Solicitações")

@@ -17,10 +17,20 @@ async def search_and_select_sin(page: Page, sin: str) -> None:
     # Clicar em Filtrar
     await safe_click(page, SELECTORS["sin_filter_btn"])
     await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(2000)  # Aguardar postback ASP.NET
 
-    # Selecionar o primeiro resultado na tabela
-    # O PAD clica no span com texto do item — aqui selecionamos a primeira linha de resultado
-    result_row = page.locator("table.GridClass tr.GridItemClass, table.GridClass tr.GridAlternateItemClass").first
+    # Verificar se há resultados na grid
+    grid_selector = "table.GridClass tr.GridItemClass, table.GridClass tr.GridAlternateItemClass"
+    result_row = page.locator(grid_selector).first
+
+    try:
+        await result_row.wait_for(state="visible", timeout=15_000)
+    except Exception:
+        raise RuntimeError(
+            f"SIN {sin} não encontrado na worklist — nenhuma linha na grid após filtrar. "
+            f"Verifique se o SIN existe e se o filtro 'Todas as Solicitações' está ativo."
+        )
+
     await result_row.click()
     await page.wait_for_load_state("networkidle")
 

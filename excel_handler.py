@@ -107,8 +107,20 @@ def validate_documents(items: list[dict]) -> list[dict]:
             continue
 
         doc_names = [d.strip() for d in str(doc_str).split(";") if d.strip()]
-        missing = [d for d in doc_names if not (DOCUMENTS_DIR / d).exists()]
-        item["_doc_files"] = doc_names
+        resolved = []
+        missing = []
+        for d in doc_names:
+            full_path = DOCUMENTS_DIR / d
+            if full_path.exists():
+                resolved.append(str(full_path))
+            else:
+                # Tentar encontrar com extensão (ex: nome sem .pdf)
+                matches = list(DOCUMENTS_DIR.glob(f"{d}.*"))
+                if matches:
+                    resolved.append(str(matches[0]))
+                else:
+                    missing.append(d)
+        item["_doc_files"] = resolved
         item["_missing_docs"] = missing
 
         if missing:

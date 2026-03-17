@@ -59,8 +59,7 @@ VIEWPORT_HEIGHT = int(os.getenv("VIEWPORT_HEIGHT", "1080"))
 SELECTORS = {
     # Worklist
     "worklist_link": "text=Acompanhamento das Solicitações (Worklist)",
-    "worklist_filter_dropdown": "text=Somente as Solicitações que requerem minha atuação",
-    "worklist_filter_search": "input[type='search']",
+    "worklist_filter_dropdown": "select:has(option[value='SOMENTE_REC_ACAO'])",
 
     # Busca de SIN
     "sin_search": "textarea[name$='txtValor']",

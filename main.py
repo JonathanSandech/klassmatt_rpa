@@ -39,7 +39,6 @@ async def process_item(page, item: dict, wb) -> str:
     log.info(f"{'='*60}")
     log.info(f"Processando SIN {sin} (linha {row})")
     log.info(f"{'='*60}")
-
     start = time.time()
 
     # Fechar popups que possam estar bloqueando
@@ -77,12 +76,10 @@ async def process_item(page, item: dict, wb) -> str:
     if item.get("codigo_60"):
         await fill_relationship(page, str(item["codigo_60"]))
 
-    # 8. Upload de documentos
+    # 8. Upload de documentos (já resolvidos com path completo pelo validate_documents)
     doc_files = item.get("_doc_files", [])
-    missing_docs = item.get("_missing_docs", [])
-    valid_docs = [d for d in doc_files if d not in missing_docs]
-    if valid_docs:
-        await upload_documents(page, valid_docs)
+    if doc_files:
+        await upload_documents(page, doc_files)
 
     # 9. Validar descrição SAP (Exibe D2 / 40 chars)
     await validate_sap_description(page)
@@ -136,8 +133,9 @@ async def process_item_with_retry(page, context, item: dict, wb, progress: dict)
                     await navigate_home(page)
                     sessao_ok = await verificar_sessao(page)
                     if not sessao_ok:
-                        log.warning("Sessão expirada — aguardando login manual...")
-                        await page.wait_for_timeout(30_000)
+                        log.warning("Sessão expirada — faça login no browser e pressione ENTER")
+                        input("Pressione ENTER após fazer login...")
+                        await page.reload(wait_until="networkidle")
                     await navigate_to_worklist(page)
                 except Exception as recovery_error:
                     log.error(f"Falha na recuperação: {recovery_error}")
@@ -147,10 +145,18 @@ async def process_item_with_retry(page, context, item: dict, wb, progress: dict)
                     await navigate_home(page)
                     await navigate_to_worklist(page)
             else:
-                # Esgotou tentativas
+                # Esgotou tentativas — pausar para inspeção
                 mark_item(progress, sin, "error", str(e))
                 color_row(wb, row, "error")
                 save_excel(wb)
+
+                log.error(
+                    f"SIN {sin} falhou após {MAX_RETRIES} tentativas. "
+                    f"Browser aberto para inspeção."
+                )
+                resp = input("Pressione ENTER para continuar com o próximo item, ou 'q' para encerrar: ")
+                if resp.strip().lower() == "q":
+                    raise KeyboardInterrupt("Encerrado pelo usuário após erro")
 
                 # Recuperar para o próximo item
                 try:
@@ -242,9 +248,20 @@ async def run() -> None:
         log.info(f"RPA concluído! Total: {total} | OK: {processed} | Erros: {errors} | Pulados: {skipped}")
         log.info("=" * 60)
 
+    except Exception as e:
+        log.error(f"Erro fatal: {e}", exc_info=True)
+        log.info("Browser mantido aberto para inspeção. Pressione ENTER no terminal para fechar.")
+        input()
+
     finally:
-        await context.close()
-        await pw.stop()  # type: ignore
+        try:
+            await context.close()
+        except Exception:
+            log.debug("Browser já estava fechado")
+        try:
+            await pw.stop()  # type: ignore
+        except Exception:
+            pass
 
 
 def main():

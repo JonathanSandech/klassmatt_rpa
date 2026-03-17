@@ -49,9 +49,36 @@ async def launch_browser() -> tuple[object, BrowserContext, Page]:
 
 
 async def navigate_home(page: Page) -> None:
-    """Navega para a página inicial do Klassmatt."""
+    """Navega para a página inicial do Klassmatt via link interno.
+
+    Não usa page.goto() diretamente pois o Klassmatt bloqueia navegação
+    por URL direta ('ACESSO NÃO AUTORIZADO À PAGINA').
+    """
+    # Tentar clicar no link do Menu Principal (preserva token de sessão)
+    menu_link = page.locator("a:has-text('Menu Principal')").first
+    try:
+        await menu_link.click(timeout=5_000)
+        await page.wait_for_load_state("networkidle")
+        log.debug("Navegou para home via link Menu Principal")
+        return
+    except Exception:
+        pass
+
+    # Fallback: se não há link (ex: primeira navegação ou página de erro),
+    # clicar em "Voltar" (página de erro) ou usar goto como último recurso
+    voltar_btn = page.locator("input[value='Voltar'], a:has-text('Voltar')").first
+    try:
+        await voltar_btn.click(timeout=5_000)
+        await page.wait_for_load_state("networkidle")
+        log.debug("Navegou para home via botão Voltar")
+        return
+    except Exception:
+        pass
+
+    # Último recurso: goto direto (funciona no login inicial)
+    log.warning("Navegando via goto direto — pode causar erro de acesso se sessão ativa")
     await page.goto(KLASSMATT_HOME, wait_until="networkidle", timeout=NAVIGATION_TIMEOUT)
-    log.debug("Navegou para home do Klassmatt")
+    log.debug("Navegou para home via goto")
 
 
 async def verificar_sessao(page: Page, timeout: int = 10_000) -> bool:
