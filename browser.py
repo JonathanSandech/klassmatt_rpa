@@ -11,8 +11,13 @@ from logger import log
 
 
 # ── Handler de dialogs JS (alerts do ASP.NET) ──
+last_dialog_message: str = ""
+
+
 async def _handle_dialog(dialog: Dialog) -> None:
     """Aceita automaticamente alerts/confirms/prompts do ASP.NET."""
+    global last_dialog_message
+    last_dialog_message = dialog.message
     log.debug(f"Dialog detectado ({dialog.type}): {dialog.message}")
     await dialog.accept()
 
@@ -31,7 +36,7 @@ async def launch_browser() -> tuple[object, BrowserContext, Page]:
         headless=HEADLESS,
         slow_mo=SLOW_MO,
         viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
-        args=["--start-maximized"],
+        args=[f"--window-size={VIEWPORT_WIDTH},{VIEWPORT_HEIGHT}"],
         accept_downloads=True,
         permissions=[],
     )
@@ -92,6 +97,8 @@ async def verificar_sessao(page: Page, timeout: int = 10_000) -> bool:
             "text=Acompanhamento das Solicitações (Worklist)",
             "text=Menu Principal",
             "text=Bem-vindo",
+            "text=Principal",
+            "text=Sair",
         ]
         start = asyncio.get_event_loop().time()
         while (asyncio.get_event_loop().time() - start) * 1000 < timeout:

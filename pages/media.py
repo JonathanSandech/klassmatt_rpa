@@ -21,19 +21,26 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
 
     log.info(f"Fazendo upload de {len(doc_files)} documento(s)")
 
-    # Navegar para aba Mídias (abre em nova aba/janela no Klassmatt)
+    # Navegar para aba Mídias (abre em nova aba no browser)
+    pages_before = len(page.context.pages)
     await safe_click(page, SELECTORS["tab_midias"])
-    await page.wait_for_load_state("networkidle")
 
-    # Pegar a página de mídias (pode abrir em popup)
-    # O PAD fazia AttachToChromeByTitle com "Klassmatt - Descriptive Standard System"
+    # Aguardar nova aba abrir
     media_page = page
-    all_pages = page.context.pages
-    for p in all_pages:
-        title = await p.title()
-        if "Descriptive Standard System" in title:
-            media_page = p
+    for _ in range(10):
+        await page.wait_for_timeout(1000)
+        if len(page.context.pages) > pages_before:
             break
+
+    # Encontrar a aba de mídias pela URL (Midia.aspx)
+    for p in page.context.pages:
+        if "Midia.aspx" in p.url:
+            media_page = p
+            await media_page.wait_for_load_state("networkidle")
+            break
+
+    if media_page == page:
+        log.warning("Aba de Mídias não abriu separadamente — usando página atual")
 
     for doc_entry in doc_files:
         doc_path = Path(doc_entry)
@@ -69,10 +76,21 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
 
         log.debug(f"Documento '{doc_name}' uploaded")
 
-    # Fechar janela de mídias
-    fechar_btn = media_page.locator(SELECTORS["media_fechar_btn"])
-    if await fechar_btn.count() > 0:
-        await fechar_btn.click()
-        await page.wait_for_timeout(1000)
+    # Fechar aba de mídias e voltar à página principal
+    if media_page != page:
+        fechar_btn = media_page.locator(SELECTORS["media_fechar_btn"])
+        if await fechar_btn.count() > 0:
+            try:
+                await fechar_btn.click()
+            except Exception:
+                pass  # cmdFechar tem onclick=window.close() — página fecha imediatamente
+        if not media_page.is_closed():
+            await media_page.close()
+        await page.bring_to_front()
+    else:
+        fechar_btn = media_page.locator(SELECTORS["media_fechar_btn"])
+        if await fechar_btn.count() > 0:
+            await fechar_btn.click()
+            await page.wait_for_timeout(1000)
 
     log.info(f"Upload de {len(doc_files)} documento(s) concluído")

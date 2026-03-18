@@ -63,7 +63,8 @@ SELECTORS = {
 
     # Busca de SIN
     "sin_search": "textarea[name$='txtValor']",
-    "sin_filter_btn": "input[value='Filtrar']",
+    "sin_filter_btn": "#butFiltrar",
+    "sin_result": "#DIVResultado .result",
     "atuar_no_item_btn": "input[value='Atuar no Item']",
 
     # Criação de item
@@ -81,36 +82,36 @@ SELECTORS = {
     "tab_descricoes": "a:has-text('Descrições')",
 
     # Fiscal
-    "ncm_input": "input[id$='tabFiscal_txtNCMTIPI']",
+    "ncm_input": "#txtNCMTIPI",
 
     # Referências
-    "ref_add_btn": "input[id$='imagebutton22']",
-    "ref_empresa_input": "input[id$='tabReferencia_txtNome']",
-    "ref_partnumber_input": "input[id$='tabReferencia_txtReferencia']",
-    "ref_exibe_d2_checkbox": "input[id$='tabReferencia_ckExibeD2']",
-    "ref_salvar_btn": "input[value='Salvar']",
+    "ref_add_btn": "input[id$='Imagebutton22']",
+    "ref_empresa_input": "#txtNome",
+    "ref_partnumber_input": "#txtReferencia",
+    "ref_exibe_d2_checkbox": "#ckExibeD2",
+    "ref_salvar_btn": "#btnSalvar",
     "ref_duplicate_text": "Referência igual em fabricante",
 
     # UNSPSC
-    "unspsc_btn": "input[id$='tabCategorias_ibutUNSPSC']",
-    "unspsc_input": "input[id$='SelecionaUNSPSC1_txtCodigoUnspsc']",
+    "unspsc_btn": "#ibutUNSPSC",
+    "unspsc_input": "#txtCodigoUnspsc",
     "unspsc_pesquisar_btn": "input[value='Pesquisar']",
     "unspsc_selecionar_btn": "input[value='Selecionar']",
 
     # Relacionamentos
-    "rel_add_btn": "input[id$='imagebutton7']",
-    "rel_tipo_input": "input[id$='txtTipo']",
-    "rel_codigo_input": "input[id$='txtCodigoRel']",
-    "rel_status_input": "input[id$='txtStatus']",
-    "rel_comentario_input": "input[id$='txtComentario']",
-    "rel_save_btn": "input[id$='updateRelac']",
+    "rel_add_btn": "input[id$='Imagebutton7']",
+    "rel_tipo_input": "input[name*='tabRelaciona'][id='txtTipo']",
+    "rel_codigo_input": "#txtCodigoRel",
+    "rel_status_input": "input[name*='tabRelaciona'][id='txtStatus']",
+    "rel_comentario_input": "#txtComentario",
+    "rel_save_btn": "#ibutUpdateRelac",
 
     # Mídias
     "media_add_link": "a:has-text('Adicionar Mídia')",
     "media_file_input": "input[id$='file']",
     "media_titulo_input": "input[id$='txtTitulo']",
     "media_salvar_btn": "input[value='Salvar']",
-    "media_fechar_btn": "input[value='Fechar']",
+    "media_fechar_btn": "#cmdFechar",
 
     # Descrições / PDM
     "editar_descricao_link": "a:has-text('Editar Descrição')",
@@ -118,9 +119,9 @@ SELECTORS = {
     "definir_padrao_btn": "input[value='Definir Padrão']",
     "partes_pecas_link": "a:has-text('PARTES E PECAS')",
 
-    # Atributos
-    "attr_na_checkbox_tpl": "input[id$='dgDadosTecnicos_ctl{idx}_ckIsNA']",
-    "attr_edit_btn_tpl": "input[id$='dgDadosTecnicos_ctl{idx}_btnAddEdit']",
+    # Atributos (IDs são genéricos; usar name para diferenciar rows)
+    "attr_na_checkbox_tpl": "input[name$='dgDadosTecnicos$ctl{idx}$ckIsNA']",
+    "attr_edit_btn_tpl": "input[name$='dgDadosTecnicos$ctl{idx}$btnAddEdit']",
 
     # Popup atributos
     "popup_letter_tpl": ".txt-letra:has-text('{letter}')",

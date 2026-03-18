@@ -22,7 +22,7 @@ async def fill_relationship(page: Page, codigo_60: str) -> None:
     await page.wait_for_load_state("networkidle")
 
     # Clicar no botão de adicionar
-    add_btn = page.locator("input[type='image'][id$='imagebutton7']")
+    add_btn = page.locator(SELECTORS["rel_add_btn"])
     await add_btn.click()
     await page.wait_for_load_state("networkidle")
 
@@ -43,7 +43,7 @@ async def fill_relationship(page: Page, codigo_60: str) -> None:
     await safe_fill(page, SELECTORS["rel_comentario_input"], RELATIONSHIP_COMMENT)
 
     # Salvar relacionamento
-    save_btn = page.locator("input[type='image'][id$='updateRelac']")
+    save_btn = page.locator(SELECTORS["rel_save_btn"])
     await save_btn.click()
     await page.wait_for_load_state("networkidle")
 

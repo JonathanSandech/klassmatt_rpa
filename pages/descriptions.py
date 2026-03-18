@@ -22,10 +22,13 @@ async def validate_sap_description(page: Page) -> None:
     await safe_click(page, SELECTORS["tab_descricoes"])
     await page.wait_for_load_state("networkidle")
 
-    # Ler texto que contém o tamanho (ex: "NUT ... HUGHES (tam: 55/40)")
-    # O PAD usa regex \d+(?=\/) para extrair o número antes da barra
-    page_text = await page.inner_text("body")
-    match = re.search(r"tam:\s*(\d+)/", page_text)
+    # Ler descrição SAP (D2) que contém o tamanho (ex: "NUT ... (tam: 55/40)")
+    # Buscar especificamente no span txtD2 para evitar falsos positivos
+    try:
+        d2_text = await page.inner_text("#txtD2")
+    except Exception:
+        d2_text = await page.inner_text("body")
+    match = re.search(r"tam:\s*(\d+)/", d2_text)
 
     if not match:
         log.warning("Não encontrou padrão de tamanho SAP — salvando normalmente")
@@ -46,8 +49,8 @@ async def validate_sap_description(page: Page) -> None:
         await safe_click(page, SELECTORS["tab_referencias"])
         await page.wait_for_load_state("networkidle")
 
-        # Editar referência (botão de edição)
-        edit_btn = page.locator("input[type='image'][id$='imagebutton22']")
+        # Editar referência (botão de edição — ID com I maiúsculo)
+        edit_btn = page.locator("input[type='image'][id$='Imagebutton22']")
         await edit_btn.click()
         await page.wait_for_load_state("networkidle")
 

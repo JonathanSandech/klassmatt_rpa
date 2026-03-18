@@ -31,7 +31,7 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> None:
     await page.wait_for_load_state("networkidle")
 
     # Selecionar o primeiro resultado (ícone de seleção na grid)
-    unspsc_select_icon = page.locator("input[id$='kSelUNSPSC']").first
+    unspsc_select_icon = page.locator("input[id$='ckSelUNSPSC']").first
     await unspsc_select_icon.click()
     await page.wait_for_load_state("networkidle")
 

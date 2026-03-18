@@ -17,75 +17,130 @@ async def search_and_select_sin(page: Page, sin: str) -> None:
     # Clicar em Filtrar
     await safe_click(page, SELECTORS["sin_filter_btn"])
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)  # Aguardar postback ASP.NET
+    await page.wait_for_timeout(5000)  # Aguardar postback ASP.NET
 
-    # Verificar se há resultados na grid
-    grid_selector = "table.GridClass tr.GridItemClass, table.GridClass tr.GridAlternateItemClass"
-    result_row = page.locator(grid_selector).first
+    # Verificar se há resultados na grid (estrutura de divs, não table)
+    result_row = page.locator(SELECTORS["sin_result"]).first
 
     try:
-        await result_row.wait_for(state="visible", timeout=15_000)
+        await result_row.wait_for(state="visible", timeout=25_000)
     except Exception:
         raise RuntimeError(
-            f"SIN {sin} não encontrado na worklist — nenhuma linha na grid após filtrar. "
+            f"SIN {sin} não encontrado na worklist — nenhum resultado em #DIVResultado após filtrar. "
             f"Verifique se o SIN existe e se o filtro 'Todas as Solicitações' está ativo."
         )
 
-    await result_row.click()
+    # Navegar clicando no link abreSIN (estrutura real da worklist)
+    sin_link = page.locator(f"a[href*='abreSIN({sin})']")
+    try:
+        await sin_link.wait_for(state="visible", timeout=5_000)
+        await sin_link.click()
+    except Exception:
+        # Fallback: clicar no resultado diretamente
+        await result_row.click()
     await page.wait_for_load_state("networkidle")
 
     log.info(f"SIN {sin} selecionado")
 
 
 async def atuar_no_item(page: Page) -> None:
-    """Clica em 'Atuar no Item'."""
+    """Clica em 'Atuar no Item' e aguarda navegação para página de edição."""
     await safe_click(page, SELECTORS["atuar_no_item_btn"])
+    # Aguardar navegação completa (muda de SIN_Item_Resultante → ITEM_Edita)
     await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(2000)
+    await page.wait_for_load_state("domcontentloaded")
     log.debug("Clicou em 'Atuar no Item'")
 
 
+async def check_item_already_processed(page: Page) -> bool:
+    """Verifica se o item já avançou além de FINALIZACAO no workflow.
+
+    Itens em APROVACAO-TECNICA, APROVACAO-FINAL, etc. já foram remetidos
+    e não têm botão 'Remeter Modec'. Retorna True se já processado.
+    """
+    status_el = page.locator("input[id$='txtStatus']")
+    if await status_el.count() > 0:
+        status = await status_el.input_value()
+        if status and status != "FINALIZACAO":
+            log.info(f"Item já em status '{status}' — já foi processado anteriormente")
+            return True
+    return False
+
+
 async def criar_item(page: Page) -> None:
-    """Cria o item: Criar Item → Finalizar → Salvar → Sim."""
-    log.info("Criando item...")
+    """Cria o item se o botão 'Criar item' estiver presente.
 
-    await safe_click(page, SELECTORS["criar_item_btn"])
-    await page.wait_for_load_state("networkidle")
+    Se o item já foi criado (ex: etapa FINALIZACAO), pula esta etapa.
+    Sequência quando necessário: Criar Item → Finalizar → Salvar → Sim
+    """
+    criar_btn = page.locator(SELECTORS["criar_item_btn"])
+    if await criar_btn.count() > 0 and await criar_btn.is_visible():
+        log.info("Criando item...")
 
-    await safe_click(page, SELECTORS["finalizar_btn"])
-    await page.wait_for_load_state("networkidle")
+        await safe_click(page, SELECTORS["criar_item_btn"])
+        await page.wait_for_load_state("networkidle")
 
-    await safe_click(page, SELECTORS["salvar_btn"])
-    await page.wait_for_load_state("networkidle")
+        await safe_click(page, SELECTORS["finalizar_btn"])
+        await page.wait_for_load_state("networkidle")
 
-    await safe_click(page, SELECTORS["sim_btn"])
-    await page.wait_for_load_state("networkidle")
+        await safe_click(page, SELECTORS["salvar_btn"])
+        await page.wait_for_load_state("networkidle")
 
-    log.info("Item criado com sucesso")
+        await safe_click(page, SELECTORS["sim_btn"])
+        await page.wait_for_load_state("networkidle")
+
+        log.info("Item criado com sucesso")
+    else:
+        log.info("Item já criado — pulando etapa de criação")
 
 
 async def finalizar_e_remeter(page: Page) -> None:
     """Finaliza o item e remete para MODEC.
 
-    Sequência: Finalizar → Atuar no Item → Remeter Modec → Sim
+    Adapta o fluxo conforme os botões disponíveis na página:
+    - Se 'Finalizar' visível: Finalizar → Atuar no Item → Remeter Modec → Sim
+    - Se 'Remeter Modec' já visível (etapa FINALIZACAO): Remeter Modec → Sim
     """
     log.info("Finalizando e remetendo para MODEC...")
 
-    # Finalizar
-    await safe_click(page, SELECTORS["finalizar_btn"])
-    await page.wait_for_load_state("networkidle")
+    remeter_btn = page.locator(SELECTORS["remeter_modec_btn"])
+    finalizar_btn = page.locator(SELECTORS["finalizar_btn"])
 
-    # Aguardar e clicar em "Atuar no Item"
-    await page.wait_for_selector(SELECTORS["atuar_no_item_btn"], timeout=10_000)
-    await safe_click(page, SELECTORS["atuar_no_item_btn"])
-    await page.wait_for_load_state("networkidle")
+    # Se "Remeter Modec" já está visível, clicar direto
+    if await remeter_btn.count() > 0 and await remeter_btn.is_visible():
+        log.info("Botão 'Remeter Modec' já disponível — remetendo direto")
+        await safe_click(page, SELECTORS["remeter_modec_btn"])
+        await page.wait_for_load_state("networkidle")
 
-    # Aguardar e clicar em "Remeter Modec"
-    await page.wait_for_selector(SELECTORS["remeter_modec_btn"], timeout=10_000)
-    await safe_click(page, SELECTORS["remeter_modec_btn"])
-    await page.wait_for_load_state("networkidle")
+    elif await finalizar_btn.count() > 0 and await finalizar_btn.is_visible():
+        # Fluxo completo: Finalizar → Atuar → Remeter
+        await safe_click(page, SELECTORS["finalizar_btn"])
+        await page.wait_for_load_state("networkidle")
 
-    # Confirmar com "Sim"
-    await safe_click(page, SELECTORS["sim_btn"])
-    await page.wait_for_load_state("networkidle")
+        await page.wait_for_selector(SELECTORS["atuar_no_item_btn"], timeout=10_000)
+        await safe_click(page, SELECTORS["atuar_no_item_btn"])
+        await page.wait_for_load_state("networkidle")
+
+        await page.wait_for_selector(SELECTORS["remeter_modec_btn"], timeout=10_000)
+        await safe_click(page, SELECTORS["remeter_modec_btn"])
+        await page.wait_for_load_state("networkidle")
+    else:
+        # Verificar se o item já foi remetido (status avançou)
+        status_el = page.locator("input[id$='txtStatus']")
+        status = await status_el.input_value() if await status_el.count() > 0 else "desconhecido"
+        if status != "FINALIZACAO":
+            log.info(f"Item já em status '{status}' — já foi remetido anteriormente")
+            return
+        raise RuntimeError("Nem 'Finalizar' nem 'Remeter Modec' encontrados na página")
+
+    # Confirmar com "Sim" (se aparecer diálogo de confirmação)
+    sim_btn = page.locator(SELECTORS["sim_btn"])
+    try:
+        await sim_btn.wait_for(state="visible", timeout=5_000)
+        await safe_click(page, SELECTORS["sim_btn"])
+        await page.wait_for_load_state("networkidle")
+    except Exception:
+        log.debug("Botão 'Sim' não apareceu — confirmação não necessária")
 
     log.info("Item remetido para MODEC")
