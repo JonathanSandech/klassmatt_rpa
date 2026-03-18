@@ -1,11 +1,25 @@
 """Aba Fiscal — preenchimento do NCM."""
 
+import re
+
 import browser as _browser
 from playwright.async_api import Page
 
 from config import SELECTORS
 from browser import safe_click, safe_fill
 from logger import log
+
+
+def _format_ncm(ncm: str) -> str:
+    """Formata NCM de 8 dígitos para o padrão XXXX.XX.XX esperado pelo Klassmatt.
+
+    Ex: '73181500' → '7318.15.00', '84841000' → '8484.10.00'
+    Se já tiver pontos ou não tiver 8 dígitos, retorna como está.
+    """
+    digits = re.sub(r"\D", "", ncm)
+    if len(digits) == 8:
+        return f"{digits[:4]}.{digits[4:6]}.{digits[6:8]}"
+    return ncm
 
 
 async def fill_ncm(page: Page, ncm: str) -> None:
@@ -16,7 +30,8 @@ async def fill_ncm(page: Page, ncm: str) -> None:
     grava a última mensagem). Se rejeitado, limpa o campo para evitar
     cascata de alerts nas próximas trocas de aba.
     """
-    log.info(f"Preenchendo NCM: {ncm}")
+    ncm_formatted = _format_ncm(str(ncm))
+    log.info(f"Preenchendo NCM: {ncm} → {ncm_formatted}")
 
     await safe_click(page, SELECTORS["tab_fiscal"])
     await page.wait_for_load_state("networkidle")
@@ -35,7 +50,7 @@ async def fill_ncm(page: Page, ncm: str) -> None:
     # Limpar flag de dialog antes de preencher
     _browser.last_dialog_message = ""
 
-    await safe_fill(page, SELECTORS["ncm_input"], str(ncm))
+    await safe_fill(page, SELECTORS["ncm_input"], ncm_formatted)
 
     # Disparar validação saindo do campo (Tab) e aguardar postback
     await page.keyboard.press("Tab")

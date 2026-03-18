@@ -1,5 +1,6 @@
 """Upload de documentos na aba Mídias."""
 
+import re
 from pathlib import Path
 
 from playwright.async_api import Page
@@ -18,6 +19,17 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
     if not doc_files:
         log.info("Nenhum documento para upload")
         return
+
+    # Verificar se já existem mídias (idempotente)
+    tab_el = page.locator("a:has-text('Mídias')").first
+    try:
+        tab_text = await tab_el.inner_text(timeout=5_000)
+        match = re.search(r"\((\d+)\)", tab_text)
+        if match and int(match.group(1)) >= len(doc_files):
+            log.info(f"Mídias já existem ({match.group(1)} uploads) — pulando")
+            return
+    except Exception:
+        pass
 
     log.info(f"Fazendo upload de {len(doc_files)} documento(s)")
 

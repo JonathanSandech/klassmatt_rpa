@@ -289,6 +289,10 @@ async def run() -> None:
                 skipped += 1
                 continue
 
+            # Delay entre itens para não sobrecarregar o Klassmatt
+            if idx > 0:
+                await asyncio.sleep(5)
+
             item_start = time.time()
             status, page = await process_item_with_retry(page, context, item, wb, progress)
             item_elapsed = time.time() - item_start
