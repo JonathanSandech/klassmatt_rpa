@@ -5,25 +5,31 @@ import re
 from playwright.async_api import Page
 
 from config import SELECTORS, PDM_CATEGORY
-from browser import safe_click, safe_fill
+from browser import safe_click, safe_fill, hide_overlays
 from logger import log
 
 
-async def validate_sap_description(page: Page) -> None:
-    """Verifica tamanho da descrição SAP e desmarca 'Exibe D2' se > 40 chars.
+async def _click_tab(page: Page, tab_name: str) -> None:
+    """Clica em uma aba via JS para evitar problemas de overlay."""
+    await page.evaluate(
+        f"""() => {{
+            const tabs = document.querySelectorAll('a');
+            const tab = Array.from(tabs).find(a => a.innerText.includes('{tab_name}'));
+            if (tab) tab.click();
+        }}"""
+    )
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(1000)
+    await hide_overlays(page)
 
-    Lê o texto da descrição SAP que contém o padrão "(tam: XX/40)",
-    extrai o número antes da / e se > 40, vai em Referências para
-    desmarcar o checkbox Exibe D2.
-    """
+
+async def validate_sap_description(page: Page) -> None:
+    """Verifica tamanho da descrição SAP e desmarca 'Exibe D2' se > 40 chars."""
     log.info("Validando descrição SAP...")
 
-    # Navegar para aba Descrições
-    await safe_click(page, SELECTORS["tab_descricoes"])
-    await page.wait_for_load_state("networkidle")
+    await _click_tab(page, "Descrições")
 
-    # Ler descrição SAP (D2) que contém o tamanho (ex: "NUT ... (tam: 55/40)")
-    # Buscar especificamente no span txtD2 para evitar falsos positivos
+    # Ler descrição SAP (D2)
     try:
         d2_text = await page.inner_text("#txtD2")
     except Exception:
@@ -31,12 +37,7 @@ async def validate_sap_description(page: Page) -> None:
     match = re.search(r"tam:\s*(\d+)/", d2_text)
 
     if not match:
-        log.warning("Não encontrou padrão de tamanho SAP — salvando normalmente")
-        salvar_btn = page.locator(SELECTORS["salvar_btn"])
-        if await salvar_btn.count() > 0:
-            await salvar_btn.nth(1).click()  # "Salvar 2" no PAD
-            await page.wait_for_load_state("networkidle")
-            await page.keyboard.press("Enter")
+        log.warning("Não encontrou padrão de tamanho SAP — continuando")
         return
 
     tamanho = int(match.group(1))
@@ -45,40 +46,70 @@ async def validate_sap_description(page: Page) -> None:
     if tamanho > 40:
         log.info("Tamanho > 40 — desmarcando 'Exibe D2'")
 
-        # Ir para aba Referências
-        await safe_click(page, SELECTORS["tab_referencias"])
-        await page.wait_for_load_state("networkidle")
+        await _click_tab(page, "Referências")
 
-        # Editar referência (botão de edição — ID com I maiúsculo)
-        edit_btn = page.locator("input[type='image'][id$='Imagebutton22']")
-        await edit_btn.click()
+        # Editar referência existente via JS
+        await page.evaluate(
+            """() => {
+                const btn = document.querySelector("[id$='Imagebutton22']");
+                if (btn) btn.click();
+            }"""
+        )
         await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(1000)
+        await hide_overlays(page)
 
         # Desmarcar checkbox Exibe D2
         checkbox = page.locator(SELECTORS["ref_exibe_d2_checkbox"])
-        if await checkbox.is_checked():
-            await checkbox.uncheck()
+        try:
+            if await checkbox.count() > 0 and await checkbox.is_checked():
+                await checkbox.uncheck()
+                log.debug("Exibe D2 desmarcado")
+            else:
+                log.debug("Exibe D2 já desmarcado ou não encontrado")
+        except Exception:
+            log.debug("Checkbox Exibe D2 não acessível")
 
-        # Salvar
-        salvar_btn = page.locator(SELECTORS["ref_salvar_btn"]).first
-        await salvar_btn.click()
-        await page.wait_for_load_state("networkidle")
+        # Salvar referência via JS
+        await page.evaluate(
+            """() => {
+                const btn = document.querySelector('#btnSalvar');
+                if (btn) btn.click();
+            }"""
+        )
+        # Timeout curto — o save pode redirecionar para página de aviso
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:
+            pass
         await page.wait_for_timeout(2000)
 
-        # Segundo salvar (confirmação)
-        salvar2 = page.locator(SELECTORS["salvar_btn"])
-        if await salvar2.count() > 1:
-            await salvar2.nth(1).click()
-            await page.wait_for_load_state("networkidle")
-
-        await page.keyboard.press("Enter")
-    else:
-        # Apenas salvar
-        salvar2 = page.locator(SELECTORS["salvar_btn"])
-        if await salvar2.count() > 1:
-            await salvar2.nth(1).click()
-            await page.wait_for_load_state("networkidle")
-        await page.keyboard.press("Enter")
+        # Verificar se apareceu aviso "Referência igual" com botão Continuar/Voltar
+        # Tentar múltiplos seletores pois o layout pode variar
+        for btn_selector in [
+            "input[value='Continuar']",
+            "input[value='continuar']",
+            "a:has-text('Continuar')",
+            "input[value='Voltar']",
+        ]:
+            btn = page.locator(btn_selector)
+            try:
+                if await btn.count() > 0 and await btn.is_visible():
+                    btn_val = btn_selector.split("'")[1] if "'" in btn_selector else btn_selector
+                    log.debug(f"Aviso detectado — clicando '{btn_val}'")
+                    if "Continuar" in btn_selector:
+                        await btn.click()
+                    else:
+                        # Se só tem Voltar, clicar para voltar à página do item
+                        await btn.click()
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=10_000)
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(1000)
+                    break
+            except Exception:
+                continue
 
     log.info("Validação SAP concluída")
 
@@ -91,33 +122,84 @@ async def change_pdm(page: Page, pdm: str) -> None:
     """
     log.info(f"Alterando PDM para: {pdm}")
 
-    # Navegar para aba Descrições
-    await safe_click(page, SELECTORS["tab_descricoes"])
-    await page.wait_for_load_state("networkidle")
+    await _click_tab(page, "Descrições")
 
-    # Clicar em "Editar Descrição"
-    await safe_click(page, SELECTORS["editar_descricao_link"])
-    await page.wait_for_load_state("networkidle")
+    # Verificar se PDM já está definido (idempotente)
+    pdm_already_set = await page.evaluate(
+        """() => {
+            const links = document.querySelectorAll('a');
+            const editLink = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
+            // Se não há link "Editar Descrição" mas há conteúdo de descrição, PDM pode já estar set
+            const padrao = document.querySelector('#txtPadrao');
+            if (padrao && padrao.value && padrao.value !== '1') return true;
+            return false;
+        }"""
+    )
+
+    # Clicar em "Editar Descrição" via JS
+    if "ITEM_Edita_DescricaoV3" not in page.url:
+        found = await page.evaluate(
+            """() => {
+                const links = document.querySelectorAll('a');
+                const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
+                if (link) { link.click(); return true; }
+                return false;
+            }"""
+        )
+        if found:
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
+            await hide_overlays(page)
+        else:
+            log.warning("Link 'Editar Descrição' não encontrado — PDM pode já estar definido")
+            return
+
+    # Verificar se já existe dgDadosTecnicos (PDM já definido com atributos)
+    has_grid = await page.locator("#dgDadosTecnicos").count() > 0
+    if has_grid:
+        log.info(f"PDM já definido (dgDadosTecnicos presente) — pulando")
+        return
 
     # Aguardar botão "Alterar Padrão"
-    await page.wait_for_selector(SELECTORS["alterar_padrao_btn"], timeout=10_000)
-    await safe_click(page, SELECTORS["alterar_padrao_btn"])
-    await page.wait_for_timeout(1000)
+    alterar_btn = page.locator(SELECTORS["alterar_padrao_btn"])
+    try:
+        await alterar_btn.wait_for(state="visible", timeout=10_000)
+    except Exception:
+        log.warning("Botão 'Alterar Padrão' não encontrado — PDM pode já estar definido")
+        return
 
-    # Preencher PDM no campo de busca (campo de texto que aparece)
-    # O PAD usava UIAutomation para isso — aqui tentamos o input que aparece
+    await page.evaluate(
+        """() => {
+            const btn = document.querySelector("input[value='Alterar Padrão']");
+            if (btn) btn.click();
+        }"""
+    )
+    await page.wait_for_timeout(2000)
+
+    # Preencher PDM no campo de busca
     pdm_input = page.locator("input[type='text']").last
     await pdm_input.fill(str(pdm))
     await page.wait_for_timeout(2000)
     await page.keyboard.press("Enter")
     await page.wait_for_timeout(2000)
 
-    # Clicar em "PARTES E PECAS"
-    await safe_click(page, SELECTORS["partes_pecas_link"])
+    # Clicar em "PARTES E PECAS" via JS
+    await page.evaluate(
+        f"""() => {{
+            const links = document.querySelectorAll('a');
+            const link = Array.from(links).find(a => a.innerText.includes('{PDM_CATEGORY}'));
+            if (link) link.click();
+        }}"""
+    )
     await page.wait_for_timeout(2000)
 
-    # Clicar em "Definir Padrão"
-    await safe_click(page, SELECTORS["definir_padrao_btn"])
+    # Clicar em "Definir Padrão" via JS
+    await page.evaluate(
+        """() => {
+            const btn = document.querySelector("input[value='Definir Padrão']");
+            if (btn) btn.click();
+        }"""
+    )
     await page.wait_for_load_state("networkidle")
 
     log.info(f"PDM alterado para: {pdm} / {PDM_CATEGORY}")

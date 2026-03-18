@@ -53,6 +53,25 @@ async def launch_browser() -> tuple[object, BrowserContext, Page]:
     return pw, context, page
 
 
+async def hide_overlays(page: Page) -> None:
+    """Esconde overlays do Klassmatt que interceptam clicks do Playwright.
+
+    O div#div1 é um painel de descrição expandida que fica sobre os botões
+    na parte inferior da página, bloqueando Playwright clicks.
+    """
+    try:
+        await page.evaluate(
+            """() => {
+                const div1 = document.querySelector('#div1');
+                if (div1) div1.style.pointerEvents = 'none';
+                const pg2 = document.querySelector('#pg-2');
+                if (pg2) pg2.style.pointerEvents = 'none';
+            }"""
+        )
+    except Exception:
+        pass
+
+
 async def navigate_home(page: Page) -> None:
     """Navega para a página inicial do Klassmatt via link interno.
 
@@ -140,9 +159,28 @@ async def fechar_popups(page: Page) -> None:
 
 
 async def safe_click(page: Page, selector: str, timeout: int | None = None) -> None:
-    """Clica em um elemento com wait automático."""
+    """Clica em um elemento com wait automático.
+
+    Se o click normal falhar por interceptação de outro elemento,
+    tenta via JavaScript (bypassa overlays ASP.NET).
+    Após JS click, aguarda navegação se o click disparou postback.
+    """
     timeout = timeout or ACTION_TIMEOUT
-    await page.click(selector, timeout=timeout)
+    try:
+        await page.click(selector, timeout=timeout)
+    except Exception as e:
+        if "intercepts pointer events" in str(e):
+            log.debug(f"Click interceptado em '{selector}' — usando JS fallback")
+            el = page.locator(selector).first
+            await el.evaluate("el => el.click()")
+            # JS click pode disparar __doPostBack — aguardar navegação
+            await page.wait_for_timeout(500)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception:
+                pass
+        else:
+            raise
 
 
 async def safe_fill(page: Page, selector: str, value: str, timeout: int | None = None) -> None:

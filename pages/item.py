@@ -129,10 +129,23 @@ async def finalizar_e_remeter(page: Page) -> None:
         # Verificar se o item já foi remetido (status avançou)
         status_el = page.locator("input[id$='txtStatus']")
         status = await status_el.input_value() if await status_el.count() > 0 else "desconhecido"
-        if status != "FINALIZACAO":
+        if status and status != "FINALIZACAO":
             log.info(f"Item já em status '{status}' — já foi remetido anteriormente")
             return
-        raise RuntimeError("Nem 'Finalizar' nem 'Remeter Modec' encontrados na página")
+
+        # Tentar recarregar a página e verificar novamente
+        await page.wait_for_timeout(2000)
+        remeter_btn2 = page.locator(SELECTORS["remeter_modec_btn"])
+        finalizar_btn2 = page.locator(SELECTORS["finalizar_btn"])
+        if await remeter_btn2.count() > 0:
+            await safe_click(page, SELECTORS["remeter_modec_btn"])
+            await page.wait_for_load_state("networkidle")
+        elif await finalizar_btn2.count() > 0:
+            await safe_click(page, SELECTORS["finalizar_btn"])
+            await page.wait_for_load_state("networkidle")
+        else:
+            log.warning(f"Nem 'Finalizar' nem 'Remeter Modec' encontrados (status={status}) — pulando remessa")
+            return
 
     # Confirmar com "Sim" (se aparecer diálogo de confirmação)
     sim_btn = page.locator(SELECTORS["sim_btn"])

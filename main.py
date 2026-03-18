@@ -11,7 +11,7 @@ import time
 from config import KLASSMATT_HOME, MAX_RETRIES, RETRY_DELAY_MS
 from browser import (
     launch_browser, navigate_home, retry_action,
-    verificar_sessao, fechar_popups, _handle_dialog,
+    verificar_sessao, fechar_popups, _handle_dialog, hide_overlays,
 )
 from excel_handler import load_excel, color_row, save_excel, validate_documents
 from state import load_progress, mark_item, is_processed
@@ -70,7 +70,7 @@ async def process_item(page, item: dict, wb) -> str:
     log.info(f"Processando SIN {sin} (linha {row})")
     log.info(f"{'='*60}")
 
-    # Fechar popups que possam estar bloqueando
+    # Fechar popups e esconder overlays
     await fechar_popups(page)
 
     # 1. Buscar e selecionar o SIN na worklist
@@ -79,6 +79,7 @@ async def process_item(page, item: dict, wb) -> str:
 
     # 2. Atuar no Item
     await atuar_no_item(page)
+    await hide_overlays(page)
     t.mark("Atuar no Item")
 
     # 2b. Verificar se item já foi processado (status != FINALIZACAO)

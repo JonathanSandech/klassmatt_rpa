@@ -23,10 +23,13 @@ async def fill_ncm(page: Page, ncm: str) -> None:
 
     # Verificar se o campo já está preenchido e readonly (item parcialmente processado)
     ncm_el = page.locator(SELECTORS["ncm_input"])
-    is_readonly = await ncm_el.get_attribute("readonly")
+    is_editable = await ncm_el.is_editable()
     current_value = await ncm_el.input_value()
-    if is_readonly and current_value:
-        log.info(f"NCM já preenchido ({current_value}) e readonly — pulando")
+    if not is_editable:
+        log.info(f"NCM campo não editável (valor: '{current_value}') — pulando")
+        return
+    if current_value and current_value.strip():
+        log.info(f"NCM já preenchido ({current_value}) — pulando")
         return
 
     # Limpar flag de dialog antes de preencher

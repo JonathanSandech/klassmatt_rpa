@@ -85,7 +85,8 @@ SELECTORS = {
     "ncm_input": "#txtNCMTIPI",
 
     # Referências
-    "ref_add_btn": "input[id$='Imagebutton22']",
+    "ref_add_btn": "#iButAddRef",
+    "ref_edit_btn": "input[id$='Imagebutton22']",
     "ref_empresa_input": "#txtNome",
     "ref_partnumber_input": "#txtReferencia",
     "ref_exibe_d2_checkbox": "#ckExibeD2",

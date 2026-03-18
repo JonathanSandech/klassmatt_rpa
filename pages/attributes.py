@@ -34,10 +34,32 @@ async def fill_attributes(page: Page, attributes: list) -> None:
 
     # Garantir que estamos na página de edição de descrição (onde dgDadosTecnicos fica)
     if "ITEM_Edita_DescricaoV3" not in page.url:
-        await safe_click(page, SELECTORS["tab_descricoes"])
+        # Navegar via JS para evitar problemas de overlay
+        await page.evaluate(
+            """() => {
+                const tabs = document.querySelectorAll('a');
+                const tab = Array.from(tabs).find(a => a.innerText.includes('Descrições'));
+                if (tab) tab.click();
+            }"""
+        )
         await page.wait_for_load_state("networkidle")
-        await safe_click(page, SELECTORS["editar_descricao_link"])
-        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(1000)
+
+        # Clicar "Editar Descrição" via JS
+        found = await page.evaluate(
+            """() => {
+                const links = document.querySelectorAll('a');
+                const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
+                if (link) { link.click(); return true; }
+                return false;
+            }"""
+        )
+        if found:
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
+        else:
+            log.warning("Link 'Editar Descrição' não encontrado — pulando atributos")
+            return
 
     # Verificar se a tabela de atributos existe
     has_grid = await page.locator("#dgDadosTecnicos").count() > 0
@@ -87,11 +109,23 @@ async def fill_attributes(page: Page, attributes: list) -> None:
                     if await atuar.count() > 0:
                         await atuar.click()
                         await page.wait_for_load_state("networkidle")
-                # Re-navegar para DescricaoV3
+                # Re-navegar para DescricaoV3 via JS
                 if "ITEM_Edita_DescricaoV3" not in page.url:
-                    await safe_click(page, SELECTORS["tab_descricoes"])
+                    await page.evaluate(
+                        """() => {
+                            const tabs = document.querySelectorAll('a');
+                            const tab = Array.from(tabs).find(a => a.innerText.includes('Descrições'));
+                            if (tab) tab.click();
+                        }"""
+                    )
                     await page.wait_for_load_state("networkidle")
-                    await safe_click(page, SELECTORS["editar_descricao_link"])
+                    await page.evaluate(
+                        """() => {
+                            const links = document.querySelectorAll('a');
+                            const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
+                            if (link) link.click();
+                        }"""
+                    )
                     await page.wait_for_load_state("networkidle")
 
     # Voltar para a página do item (ITEM_Edita.aspx) se estamos na DescricaoV3
@@ -169,7 +203,7 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
 
         # Passo 1: Clicar na letra do alfabeto para expandir a sub-árvore
         # As letras são links com __doPostBack que causam navegação/postback
-        # Usar evaluate para encontrar o nó + Playwright waitForLoadState para esperar postback
+        # O click causa full page reload — precisamos esperar a nova página carregar
         letter_found = await popup_page.evaluate(
             """(letter) => {
                 const nodes = document.querySelectorAll('a[class*="nodeStyle"]');
@@ -184,8 +218,13 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         )
         if letter_found:
             log.debug(f"Expandindo letra '{first_letter}' na árvore")
+            # __doPostBack causa full reload — esperar a página recarregar completamente
+            try:
+                await popup_page.wait_for_load_state("load", timeout=15_000)
+            except Exception:
+                pass
             await popup_page.wait_for_load_state("networkidle", timeout=15_000)
-            await popup_page.wait_for_timeout(1000)
+            await popup_page.wait_for_timeout(1500)
         else:
             log.debug(f"Letra '{first_letter}' não encontrada na árvore")
 
