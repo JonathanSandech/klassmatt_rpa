@@ -112,8 +112,11 @@ A planilha deve conter as seguintes colunas (configuráveis em `config.py`):
 ## Execução
 
 ```bash
-cd klassmatt_rpa
+# Cadastro em massa (fluxo principal)
 python main.py
+
+# Corrigir NCM em itens já processados (Retornar Etapa → NCM → Remeter)
+python fix_ncm.py
 ```
 
 ### Primeiro uso
@@ -128,9 +131,10 @@ Se o processo for interrompido, basta executar novamente. O bot lê o `progress.
 
 ```
 klassmatt_rpa/
-├── main.py              # Orquestrador principal
+├── main.py              # Orquestrador principal (5s delay entre itens)
 ├── config.py            # Configurações, caminhos, seletores
-├── browser.py           # Setup do Playwright e helpers
+├── browser.py           # Setup do Playwright, safe_click com JS fallback, hide_overlays
+├── fix_ncm.py           # Script para corrigir NCM em itens já processados
 ├── excel_handler.py     # Leitura do Excel e coloração de linhas
 ├── state.py             # Controle de progresso (progress.json)
 ├── logger.py            # Logging (arquivo + console)
@@ -139,7 +143,7 @@ klassmatt_rpa/
 │   ├── worklist.py      #   Navegação e filtro da worklist
 │   ├── item.py          #   Busca SIN, criar, finalizar, remeter
 │   ├── classifications.py #  Popup de classificação UNSPSC
-│   ├── fiscal.py        #   Dados fiscais (NCM)
+│   ├── fiscal.py        #   NCM (formato XXXX.XX.XX automático)
 │   ├── references.py    #   Referências (empresa + part number)
 │   ├── relationships.py #   Relacionamentos (código antigo)
 │   ├── media.py         #   Upload de documentos
@@ -208,3 +212,45 @@ Clicar numa letra dispara `__doPostBack` que recarrega a popup inteira. O códig
 - **Mídias `cmdFechar`** (`media.py`): O botão Fechar tem `onclick="window.close()"` que destrói a página antes do Playwright completar o click. Adicionado try/except
 - **NCM readonly** (`fiscal.py`): Itens parcialmente processados têm o campo NCM como `readonly`. O bot agora detecta e pula
 - **Volta da DescricaoV3** (`attributes.py`): Após preencher atributos, navega de volta via `butSIN_Voltar` → `Atuar no Item` para que `finalizar_e_remeter` funcione
+
+### 2026-03-18 — Robustez, idempotência e fix NCM
+
+Bot processou **29/29 itens com sucesso** (0 erros) rodando autonomamente durante a noite.
+
+#### Overlay div1 bloqueando clicks
+
+**Sintoma**: Clicks em abas e botões falhavam com "intercepts pointer events" por `<div id="div1">`.
+
+**Fix**: `hide_overlays()` em `browser.py` desabilita `pointer-events` no div1. `safe_click()` faz fallback automático via JS `evaluate`. Tabs em `descriptions.py` e `attributes.py` usam JS evaluate direto.
+
+#### Idempotência de todas as etapas
+
+**Sintoma**: Reprocessar itens causava duplicatas, formulários dirty e travamentos.
+
+**Fix**:
+- `references.py`: verifica `Referências (N)` no label da aba — pula se N > 0
+- `media.py`: verifica `Mídias (N)` — pula upload se já existe
+- `fiscal.py`: usa `is_editable()` em vez de `get_attribute("readonly")`
+- `relationships.py`: detecta alert "já está relacionado" após save
+- `descriptions.py`: verifica `dgDadosTecnicos` presente para pular PDM
+- `item.py`: não falha se Finalizar/Remeter não encontrados
+
+#### iButAddRef vs Imagebutton22
+
+**Sintoma**: Bot usava `Imagebutton22` para adicionar referência, mas esse é o botão EDIT do repeater.
+
+**Fix**: Usar `#iButAddRef` (adiciona.gif) para nova referência, `Imagebutton22` (icon1.gif) apenas para editar existente.
+
+#### NCM formato XXXX.XX.XX
+
+**Sintoma**: Todos os NCMs rejeitados como "inválido ou inativo".
+
+**Causa**: Excel tem `73181500`, Klassmatt espera `7318.15.00`.
+
+**Fix**: `_format_ncm()` em `fiscal.py` converte automaticamente. Script `fix_ncm.py` criado para corrigir retroativamente os 29 itens via fluxo Retornar Etapa → NCM → Remeter.
+
+#### Rate limiting
+
+**Sintoma**: Navegação rápida entre itens causa "Ocorreu uma exceção" no Klassmatt.
+
+**Fix**: 5s delay entre itens no `main.py`. Após Remeter, aguardar `pesquisar()` estar definido antes de buscar próximo SIN.
