@@ -8,7 +8,7 @@ import asyncio
 import sys
 import time
 
-from config import KLASSMATT_HOME, MAX_RETRIES, RETRY_DELAY_MS
+from config import KLASSMATT_HOME, MAX_RETRIES, RETRY_DELAY_MS, SELECTORS
 from browser import (
     launch_browser, navigate_home, retry_action,
     verificar_sessao, fechar_popups, _handle_dialog, hide_overlays,
@@ -138,8 +138,16 @@ async def process_item(page, item: dict, wb) -> str:
     t.mark("Atributos")
 
     # 12. Finalizar e Remeter para MODEC
-    await finalizar_e_remeter(page)
-    t.mark("Remeter MODEC")
+    # DESABILITADO até validação completa — manter itens em FINALIZACAO
+    # await finalizar_e_remeter(page)
+    # t.mark("Remeter MODEC")
+    log.info("Remeter MODEC DESABILITADO — item mantido em FINALIZACAO para revisão")
+    t.mark("(Remeter desabilitado)")
+
+    # Voltar para worklist
+    await navigate_home(page)
+    await navigate_to_worklist(page)
+    t.mark("Voltar Worklist")
 
     log.info(f"\n{t.summary()}")
 

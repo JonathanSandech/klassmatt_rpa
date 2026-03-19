@@ -67,13 +67,35 @@ async def fill_attributes(page: Page, attributes: list) -> None:
         log.warning("Tabela dgDadosTecnicos não encontrada — pulando atributos")
         return
 
-    for i, value in enumerate(attributes):
-        if value is None or (isinstance(value, str) and value.strip() == ""):
-            log.info(f"Atributo {i + 1}: vazio — encerrando loop de atributos")
-            break
+    # Contar quantos atributos existem na grid
+    total_attrs = await page.evaluate(
+        """() => {
+            const dg = document.querySelector('#dgDadosTecnicos');
+            if (!dg) return 0;
+            return dg.querySelectorAll('tr').length - 1;  // -1 para header
+        }"""
+    )
 
-        value_str = str(value).strip()
+    for i in range(total_attrs):
         ctl_idx = _attr_ctl_index(i + 1)
+
+        # Verificar se o atributo já está preenchido (idempotente)
+        current_val = await page.evaluate(
+            f"""() => {{
+                const row = document.querySelector("input[name$='dgDadosTecnicos$ctl{ctl_idx}$hdnDtTexto']");
+                return row ? row.value.trim() : '';
+            }}"""
+        )
+        if current_val and current_val != "":
+            log.debug(f"Atributo {i + 1}: já preenchido com '{current_val}' — pulando")
+            continue
+
+        # Pegar valor da planilha (ou N/A se acabaram os valores)
+        value = attributes[i] if i < len(attributes) else None
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            value_str = "N/A"
+        else:
+            value_str = str(value).strip()
 
         if value_str.upper() == "N/A":
             # Marcar checkbox N/A
@@ -99,17 +121,14 @@ async def fill_attributes(page: Page, attributes: list) -> None:
             await _open_and_fill_tree_popup(page, ctl_idx, value_str)
 
             # Após popup fechar, verificar se ainda estamos na DescricaoV3
-            # (selecionar na popup pode causar navegação na página pai)
             await page.wait_for_timeout(1000)
             if "ITEM_Edita_DescricaoV3" not in page.url:
                 log.debug(f"Página mudou após popup: {page.url} — re-navegando para DescricaoV3")
-                # Se saiu da DescricaoV3, precisamos navegar de volta
                 if "ITEM_Resumo" in page.url or "SIN_Item_Resultante" in page.url:
                     atuar = page.locator(SELECTORS["atuar_no_item_btn"])
                     if await atuar.count() > 0:
                         await atuar.click()
                         await page.wait_for_load_state("networkidle")
-                # Re-navegar para DescricaoV3 via JS
                 if "ITEM_Edita_DescricaoV3" not in page.url:
                     await page.evaluate(
                         """() => {
@@ -128,14 +147,41 @@ async def fill_attributes(page: Page, attributes: list) -> None:
                     )
                     await page.wait_for_load_state("networkidle")
 
-    # Voltar para a página do item (ITEM_Edita.aspx) se estamos na DescricaoV3
+    # Finalizar para persistir os atributos (sem Finalizar, valores são perdidos)
+    if "ITEM_Edita_DescricaoV3" in page.url:
+        import browser as _browser
+        _browser.last_dialog_message = ""
+
+        finalizar_btn = page.locator("#butFinaliza")
+        if await finalizar_btn.count() > 0:
+            log.debug("Clicando Finalizar na DescricaoV3 para salvar atributos...")
+            try:
+                await finalizar_btn.click()
+                await page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception:
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15_000)
+                except Exception:
+                    pass
+            await page.wait_for_timeout(1000)
+
+            # Verificar se Finalizar foi rejeitado (alert de dados técnicos incompletos)
+            if "ITEM_Edita_DescricaoV3" in page.url:
+                last_msg = _browser.last_dialog_message.lower()
+                if "preencher" in last_msg or "verificar" in last_msg or "dados técnicos" in last_msg:
+                    log.warning(f"Finalizar rejeitado: '{_browser.last_dialog_message}' — atributos não salvos")
+                else:
+                    log.warning("Ainda na DescricaoV3 após Finalizar — pode não ter salvo")
+            else:
+                log.debug("Atributos finalizados e salvos com sucesso")
+
+    # Voltar para a página do item (ITEM_Edita.aspx) se ainda estamos na DescricaoV3
     if "ITEM_Edita_DescricaoV3" in page.url:
         log.debug("Voltando da DescricaoV3 para a página do item...")
         voltar_btn = page.locator("#butSIN_Voltar")
         if await voltar_btn.count() > 0:
             await voltar_btn.click()
             await page.wait_for_load_state("networkidle", timeout=15_000)
-            # butSIN_Voltar leva à SIN; precisamos clicar "Atuar no Item" de novo
             await page.wait_for_timeout(1000)
             atuar_btn = page.locator(SELECTORS["atuar_no_item_btn"])
             if await atuar_btn.count() > 0:
@@ -199,6 +245,16 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
     try:
         await popup_page.wait_for_load_state("networkidle", timeout=15_000)
 
+        # Esperar que a árvore renderize seus nós (ASP.NET TreeView usa JS client-side)
+        try:
+            await popup_page.wait_for_selector(
+                "a.nodeStyle, a.nodeStyleSel, a[class*='nodeStyle']",
+                timeout=10_000,
+            )
+        except Exception:
+            log.warning("Nós da árvore não apareceram após 10s — tentando mesmo assim")
+        await popup_page.wait_for_timeout(500)
+
         first_letter = value[0].upper()
 
         # Passo 1: Clicar na letra do alfabeto para expandir a sub-árvore
@@ -206,11 +262,18 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         # O click causa full page reload — precisamos esperar a nova página carregar
         letter_found = await popup_page.evaluate(
             """(letter) => {
-                const nodes = document.querySelectorAll('a[class*="nodeStyle"]');
-                const letterNode = Array.from(nodes).find(a => a.innerText.trim() === letter);
-                if (letterNode) {
-                    letterNode.click();
-                    return true;
+                // Tentar múltiplos seletores para encontrar a letra
+                const selectors = [
+                    'a.nodeStyle', 'a.nodeStyleSel',
+                    'a[class*="nodeStyle"]', 'a[class*="NodeStyle"]'
+                ];
+                for (const sel of selectors) {
+                    const nodes = document.querySelectorAll(sel);
+                    const letterNode = Array.from(nodes).find(a => a.innerText.trim() === letter);
+                    if (letterNode) {
+                        letterNode.click();
+                        return true;
+                    }
                 }
                 return false;
             }""",
@@ -224,9 +287,17 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
             except Exception:
                 pass
             await popup_page.wait_for_load_state("networkidle", timeout=15_000)
-            await popup_page.wait_for_timeout(1500)
+            # Esperar nós filhos renderizarem após o postback
+            await popup_page.wait_for_timeout(2000)
         else:
-            log.debug(f"Letra '{first_letter}' não encontrada na árvore")
+            # Listar o que está disponível para debug
+            available = await popup_page.evaluate(
+                """() => {
+                    const nodes = document.querySelectorAll('a.nodeStyle, a.nodeStyleSel, a[class*="nodeStyle"]');
+                    return Array.from(nodes).map(a => a.innerText.trim()).slice(0, 30);
+                }"""
+            )
+            log.warning(f"Letra '{first_letter}' não encontrada na árvore. Nós disponíveis: {available}")
 
         # Passo 2: Procurar o valor nos nós expandidos
         # Usar evaluate pois pode haver milhares de nós (1900+)

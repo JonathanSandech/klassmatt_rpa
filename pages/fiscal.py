@@ -41,11 +41,21 @@ async def fill_ncm(page: Page, ncm: str) -> None:
     is_editable = await ncm_el.is_editable()
     current_value = await ncm_el.input_value()
     if not is_editable:
-        log.info(f"NCM campo não editável (valor: '{current_value}') — pulando")
+        if current_value.strip() == ncm_formatted:
+            log.info(f"NCM campo não editável, valor correto ({current_value}) — pulando")
+        else:
+            log.warning(
+                f"NCM campo não editável com valor DIFERENTE do esperado: "
+                f"'{current_value}' (esperado '{ncm_formatted}') — não é possível corrigir"
+            )
+        return
+    if current_value and current_value.strip() == ncm_formatted:
+        log.info(f"NCM já preenchido corretamente ({current_value}) — pulando")
         return
     if current_value and current_value.strip():
-        log.info(f"NCM já preenchido ({current_value}) — pulando")
-        return
+        log.warning(
+            f"NCM existente '{current_value}' difere do esperado '{ncm_formatted}' — substituindo"
+        )
 
     # Limpar flag de dialog antes de preencher
     _browser.last_dialog_message = ""
@@ -71,7 +81,10 @@ async def fill_ncm(page: Page, ncm: str) -> None:
         await page.fill(SELECTORS["ncm_input"], "")
         await page.keyboard.press("Tab")
         await page.wait_for_timeout(2000)
-        # Limpar qualquer alert residual
         _browser.last_dialog_message = ""
     else:
-        log.info(f"NCM {ncm} preenchido")
+        # Salvar para persistir o NCM (sem Salvar, valor é perdido ao trocar de aba)
+        await safe_click(page, SELECTORS["salvar_btn"])
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(1000)
+        log.info(f"NCM {ncm} preenchido e salvo")

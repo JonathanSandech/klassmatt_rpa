@@ -75,26 +75,36 @@ async def hide_overlays(page: Page) -> None:
 async def navigate_home(page: Page) -> None:
     """Navega para a página inicial do Klassmatt via link interno.
 
+    Usa o link "Principal" do dlmenu no cabeçalho (via __doPostBack).
     Não usa page.goto() diretamente pois o Klassmatt bloqueia navegação
-    por URL direta ('ACESSO NÃO AUTORIZADO À PAGINA').
+    por URL direta sem o parâmetro k= ('ACESSO NÃO AUTORIZADO À PAGINA').
     """
-    # Tentar clicar no link do Menu Principal (preserva token de sessão)
-    menu_link = page.locator("a:has-text('Menu Principal')").first
+    # Tentar clicar no link "Principal" no header dlmenu (existe em todas as páginas)
     try:
-        await menu_link.click(timeout=5_000)
+        principal = page.locator("a[href*='dlmenu']", has_text="Principal").first
+        await principal.click(timeout=5_000)
         await page.wait_for_load_state("networkidle")
-        log.debug("Navegou para home via link Menu Principal")
+        log.debug("Navegou para home via link Principal")
         return
     except Exception:
         pass
 
-    # Fallback: se não há link (ex: primeira navegação ou página de erro),
-    # clicar em "Voltar" (página de erro) ou usar goto como último recurso
-    voltar_btn = page.locator("input[value='Voltar'], a:has-text('Voltar')").first
+    # Fallback: tentar "Voltar" do dlmenu (volta um nível na hierarquia)
     try:
-        await voltar_btn.click(timeout=5_000)
+        voltar = page.locator("a[href*='dlmenu']", has_text="Voltar").first
+        await voltar.click(timeout=5_000)
         await page.wait_for_load_state("networkidle")
-        log.debug("Navegou para home via botão Voltar")
+        log.debug("Navegou via link Voltar (dlmenu)")
+        return
+    except Exception:
+        pass
+
+    # Fallback: tentar "Menu Principal" (existe na home/worklist)
+    try:
+        menu_link = page.locator("a:has-text('Menu Principal')").first
+        await menu_link.click(timeout=5_000)
+        await page.wait_for_load_state("networkidle")
+        log.debug("Navegou para home via link Menu Principal")
         return
     except Exception:
         pass

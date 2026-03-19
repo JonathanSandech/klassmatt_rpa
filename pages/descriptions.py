@@ -154,10 +154,30 @@ async def change_pdm(page: Page, pdm: str) -> None:
             log.warning("Link 'Editar Descrição' não encontrado — PDM pode já estar definido")
             return
 
-    # Verificar se já existe dgDadosTecnicos (PDM já definido com atributos)
-    has_grid = await page.locator("#dgDadosTecnicos").count() > 0
-    if has_grid:
-        log.info(f"PDM já definido (dgDadosTecnicos presente) — pulando")
+    # Verificar se PDM já está definido de verdade.
+    # dgDadosTecnicos SEMPRE existe (com TEXTO LONGO/TEXTO CURTO genéricos).
+    # Só pular se Nome Válido NÃO for "(NÃO-PADRONIZADO)" — sinal de que um PDM real foi aplicado.
+    pdm_is_set = await page.evaluate(
+        """() => {
+            const body = document.body.innerText;
+            // Se "NÃO-PADRONIZADO" está na página, PDM não foi definido
+            if (body.includes('NÃO-PADRONIZADO')) return false;
+            // Verificar se existem dados técnicos reais (não só TEXTO LONGO/CURTO)
+            const grid = document.querySelector('#dgDadosTecnicos');
+            if (!grid) return false;
+            const rows = grid.querySelectorAll('tr');
+            for (const row of rows) {
+                const text = row.innerText.trim();
+                if (text && !text.includes('TEXTO LONGO') && !text.includes('TEXTO CURTO')
+                    && !text.includes('Dados Técnicos') && !text.includes('NA') && text.length > 3) {
+                    return true;  // Tem atributo real (ex: NOME VALIDO, APLICACAO)
+                }
+            }
+            return false;
+        }"""
+    )
+    if pdm_is_set:
+        log.info("PDM já definido (atributos reais presentes) — pulando")
         return
 
     # Aguardar botão "Alterar Padrão"
@@ -174,26 +194,39 @@ async def change_pdm(page: Page, pdm: str) -> None:
             if (btn) btn.click();
         }"""
     )
+    # "Alterar Padrão" navega para Pesquisa_Item.aspx (página diferente)
+    await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
 
-    # Preencher PDM no campo de busca
-    pdm_input = page.locator("input[type='text']").last
+    # Preencher PDM no campo de busca (txtFiltro)
+    pdm_input = page.locator("#txtFiltro")
+    if await pdm_input.count() == 0:
+        # Fallback: último input de texto visível
+        pdm_input = page.locator("input[type='text']").last
     await pdm_input.fill(str(pdm))
-    await page.wait_for_timeout(2000)
-    await page.keyboard.press("Enter")
+
+    # Clicar em Pesquisar (não Enter — Enter pode causar form submit errado)
+    await safe_click(page, "input[value='Pesquisar']")
+    await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
 
     # Clicar em "PARTES E PECAS" via JS
-    await page.evaluate(
+    found_cat = await page.evaluate(
         f"""() => {{
             const links = document.querySelectorAll('a');
             const link = Array.from(links).find(a => a.innerText.includes('{PDM_CATEGORY}'));
-            if (link) link.click();
+            if (link) {{ link.click(); return true; }}
+            return false;
         }}"""
     )
+    if not found_cat:
+        log.warning(f"Categoria '{PDM_CATEGORY}' não encontrada para PDM {pdm}")
+        return
+    await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
 
     # Clicar em "Definir Padrão" via JS
+    # Isso navega de volta para ITEM_Edita_DescricaoV3.aspx
     await page.evaluate(
         """() => {
             const btn = document.querySelector("input[value='Definir Padrão']");
@@ -201,5 +234,20 @@ async def change_pdm(page: Page, pdm: str) -> None:
         }"""
     )
     await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(3000)
+
+    # Garantir que voltamos para DescricaoV3 e a página está estável
+    if "ITEM_Edita_DescricaoV3" not in page.url:
+        log.debug(f"Após Definir Padrão, URL={page.url} — aguardando navegação")
+        try:
+            await page.wait_for_url("**/ITEM_Edita_DescricaoV3*", timeout=15_000)
+        except Exception:
+            log.warning(f"Não voltou para DescricaoV3 após Definir Padrão (URL={page.url})")
+    await page.wait_for_load_state("domcontentloaded")
+    await page.wait_for_timeout(2000)
+
+    # NÃO clicar Finalizar aqui — Finalizar sem atributos preenchidos não salva o PDM.
+    # O Finalizar será feito pelo fill_attributes() após preencher os atributos,
+    # o que persiste PDM + atributos juntos.
 
     log.info(f"PDM alterado para: {pdm} / {PDM_CATEGORY}")
