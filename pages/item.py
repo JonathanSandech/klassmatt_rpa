@@ -45,6 +45,8 @@ async def search_and_select_sin(page: Page, sin: str) -> None:
 
 async def atuar_no_item(page: Page) -> None:
     """Clica em 'Atuar no Item' e aguarda navegação para página de edição."""
+    # Override confirm para aceitar "outro usuário atuando" automaticamente
+    await page.evaluate("() => { window.confirm = () => true; }")
     await safe_click(page, SELECTORS["atuar_no_item_btn"])
     # Aguardar navegação completa (muda de SIN_Item_Resultante → ITEM_Edita)
     await page.wait_for_load_state("networkidle")
