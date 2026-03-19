@@ -13,6 +13,7 @@ from logger import log
 FILL_GREEN = PatternFill(start_color="00FF00", fill_type="solid")   # sucesso
 FILL_RED = PatternFill(start_color="FF0000", fill_type="solid")     # erro
 FILL_ORANGE = PatternFill(start_color="FFA500", fill_type="solid")  # duplicidade
+FILL_YELLOW = PatternFill(start_color="FFFF00", fill_type="solid")  # needs_review
 
 
 def load_excel(path: Path | None = None) -> tuple[openpyxl.Workbook, list[dict[str, Any]]]:
@@ -83,6 +84,7 @@ def color_row(wb: openpyxl.Workbook, row: int, status: str) -> None:
         "error": FILL_RED,
         "duplicate": FILL_ORANGE,
         "skipped": FILL_ORANGE,
+        "needs_review": FILL_YELLOW,
     }.get(status, FILL_RED)
     ws.cell(row=row, column=1).fill = fill
 

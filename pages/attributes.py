@@ -79,7 +79,14 @@ async def fill_attributes(page: Page, attributes: list) -> None:
     for i in range(total_attrs):
         ctl_idx = _attr_ctl_index(i + 1)
 
-        # Verificar se o atributo já está preenchido (idempotente)
+        # Pegar valor da planilha (ou N/A se acabaram os valores)
+        value = attributes[i] if i < len(attributes) else None
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            value_str = "N/A"
+        else:
+            value_str = str(value).strip()
+
+        # Verificar se o atributo já está preenchido
         current_val = await page.evaluate(
             f"""() => {{
                 const row = document.querySelector("input[name$='dgDadosTecnicos$ctl{ctl_idx}$hdnDtTexto']");
@@ -87,15 +94,25 @@ async def fill_attributes(page: Page, attributes: list) -> None:
             }}"""
         )
         if current_val and current_val != "":
-            log.debug(f"Atributo {i + 1}: já preenchido com '{current_val}' — pulando")
-            continue
-
-        # Pegar valor da planilha (ou N/A se acabaram os valores)
-        value = attributes[i] if i < len(attributes) else None
-        if value is None or (isinstance(value, str) and value.strip() == ""):
-            value_str = "N/A"
-        else:
-            value_str = str(value).strip()
+            # Comparar com o valor da planilha — pular só se bate
+            if current_val.upper() == value_str.upper():
+                log.debug(f"Atributo {i + 1}: já preenchido com '{current_val}' — pulando")
+                continue
+            elif current_val.upper() == "N/A" and value_str.upper() != "N/A":
+                log.info(f"Atributo {i + 1}: existente='N/A' mas planilha='{value_str}' — sobrescrevendo")
+                # Precisa limpar N/A antes de preencher — desmarcar checkbox N/A
+                na_selector = SELECTORS["attr_na_checkbox_tpl"].format(idx=ctl_idx)
+                na_el = page.locator(na_selector)
+                if await na_el.count() > 0:
+                    try:
+                        if await na_el.is_checked():
+                            await safe_click(page, na_selector)
+                            await page.wait_for_timeout(1000)
+                    except Exception:
+                        pass
+            else:
+                log.debug(f"Atributo {i + 1}: já preenchido com '{current_val}' (planilha='{value_str}') — pulando")
+                continue
 
         if value_str.upper() == "N/A":
             # Marcar checkbox N/A
@@ -117,8 +134,17 @@ async def fill_attributes(page: Page, attributes: list) -> None:
 
             log.debug(f"Atributo {i + 1}: '{value_str}'")
 
-            # Abrir popup da árvore via AbreJanTaxonomia() e preencher
-            await _open_and_fill_tree_popup(page, ctl_idx, value_str)
+            # Abrir popup da árvore via AbreJanTaxonomia() e preencher (com retry)
+            for popup_attempt in range(2):
+                try:
+                    await _open_and_fill_tree_popup(page, ctl_idx, value_str)
+                    break
+                except Exception as popup_err:
+                    if popup_attempt == 0:
+                        log.warning(f"Atributo {i + 1}: popup falhou ({popup_err}) — retentando")
+                        await page.wait_for_timeout(2000)
+                    else:
+                        log.warning(f"Atributo {i + 1}: popup falhou 2x — pulando atributo")
 
             # Após popup fechar, verificar se ainda estamos na DescricaoV3
             await page.wait_for_timeout(1000)

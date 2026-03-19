@@ -61,55 +61,76 @@ async def validate_sap_description(page: Page) -> None:
 
         # Desmarcar checkbox Exibe D2
         checkbox = page.locator(SELECTORS["ref_exibe_d2_checkbox"])
+        d2_changed = False
         try:
             if await checkbox.count() > 0 and await checkbox.is_checked():
                 await checkbox.uncheck()
+                d2_changed = True
                 log.debug("Exibe D2 desmarcado")
             else:
                 log.debug("Exibe D2 já desmarcado ou não encontrado")
         except Exception:
             log.debug("Checkbox Exibe D2 não acessível")
 
-        # Salvar referência via JS
-        await page.evaluate(
-            """() => {
-                const btn = document.querySelector('#btnSalvar');
-                if (btn) btn.click();
-            }"""
-        )
-        # Timeout curto — o save pode redirecionar para página de aviso
-        try:
-            await page.wait_for_load_state("networkidle", timeout=10_000)
-        except Exception:
-            pass
-        await page.wait_for_timeout(2000)
-
-        # Verificar se apareceu aviso "Referência igual" com botão Continuar/Voltar
-        # Tentar múltiplos seletores pois o layout pode variar
-        for btn_selector in [
-            "input[value='Continuar']",
-            "input[value='continuar']",
-            "a:has-text('Continuar')",
-            "input[value='Voltar']",
-        ]:
-            btn = page.locator(btn_selector)
+        if d2_changed:
+            # Salvar referência via JS
+            await page.evaluate(
+                """() => {
+                    const btn = document.querySelector('#btnSalvar');
+                    if (btn) btn.click();
+                }"""
+            )
+            # Timeout curto — o save pode redirecionar para página de aviso
             try:
-                if await btn.count() > 0 and await btn.is_visible():
-                    btn_val = btn_selector.split("'")[1] if "'" in btn_selector else btn_selector
-                    log.debug(f"Aviso detectado — clicando '{btn_val}'")
-                    if "Continuar" in btn_selector:
-                        await btn.click()
-                    else:
-                        # Se só tem Voltar, clicar para voltar à página do item
-                        await btn.click()
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=10_000)
-                    except Exception:
-                        pass
-                    await page.wait_for_timeout(1000)
-                    break
+                await page.wait_for_load_state("networkidle", timeout=10_000)
             except Exception:
-                continue
+                pass
+            await page.wait_for_timeout(2000)
+
+            # Verificar se apareceu aviso "Referência igual" com botão Continuar/Voltar
+            for btn_selector in [
+                "input[value='Continuar']",
+                "input[value='continuar']",
+                "a:has-text('Continuar')",
+            ]:
+                btn = page.locator(btn_selector)
+                try:
+                    if await btn.count() > 0 and await btn.is_visible():
+                        log.debug("Aviso 'Referência igual' — clicando 'Continuar'")
+                        await btn.click()
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=10_000)
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(1000)
+                        break
+                except Exception:
+                    continue
+        else:
+            # Não mudou nada — descartar edição voltando à aba via JS
+            # para limpar o dirty state do formulário
+            await page.evaluate(
+                """() => {
+                    const tabs = document.querySelectorAll('a');
+                    const tab = Array.from(tabs).find(a => a.innerText.includes('Dados Básicos'));
+                    if (tab) tab.click();
+                }"""
+            )
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5_000)
+            except Exception:
+                pass
+
+        # Garantir que voltamos à página de edição do item (não ficamos em página de aviso)
+        if "ITEM_Edita" not in page.url:
+            log.debug(f"Após Exibe D2, URL inesperada: {page.url} — tentando voltar")
+            voltar_btn = page.locator("input[value='Voltar']")
+            if await voltar_btn.count() > 0:
+                await voltar_btn.click()
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=10_000)
+                except Exception:
+                    pass
 
     log.info("Validação SAP concluída")
 

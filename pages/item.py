@@ -53,19 +53,20 @@ async def atuar_no_item(page: Page) -> None:
     log.debug("Clicou em 'Atuar no Item'")
 
 
-async def check_item_already_processed(page: Page) -> bool:
+async def check_item_already_processed(page: Page) -> str | None:
     """Verifica se o item já avançou além de FINALIZACAO no workflow.
 
     Itens em APROVACAO-TECNICA, APROVACAO-FINAL, etc. já foram remetidos
-    e não têm botão 'Remeter Modec'. Retorna True se já processado.
+    e não têm botão 'Remeter Modec'.
+    Retorna o status string se já processado, None se está em FINALIZACAO.
     """
     status_el = page.locator("input[id$='txtStatus']")
     if await status_el.count() > 0:
         status = await status_el.input_value()
         if status and status != "FINALIZACAO":
-            log.info(f"Item já em status '{status}' — já foi processado anteriormente")
-            return True
-    return False
+            log.info(f"Item já em status '{status}' — não está em FINALIZACAO")
+            return status
+    return None
 
 
 async def criar_item(page: Page) -> None:

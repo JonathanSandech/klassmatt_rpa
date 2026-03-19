@@ -82,10 +82,18 @@ async def process_item(page, item: dict, wb) -> str:
     await hide_overlays(page)
     t.mark("Atuar no Item")
 
-    # 2b. Verificar se item já foi processado (status != FINALIZACAO)
-    if await check_item_already_processed(page):
+    # 2b. Verificar status do item no workflow
+    item_status = await check_item_already_processed(page)
+    if item_status:
+        # Item não está em FINALIZACAO — campos readonly, não podemos editar
+        # Marcar como "needs_review" para que fix_items.py trate via Retornar Etapa
+        log.warning(f"Item em '{item_status}' — não editável, marcando para revisão")
+        t.mark(f"Status: {item_status}")
+        await navigate_home(page)
+        await navigate_to_worklist(page)
+        t.mark("Voltar Worklist")
         log.info(f"\n{t.summary()}")
-        return "ok"
+        return "needs_review"
 
     # 3. Criar Item → Finalizar → Salvar → Sim
     await criar_item(page)
@@ -308,6 +316,8 @@ async def run() -> None:
 
             if status == "error":
                 errors += 1
+            elif status == "needs_review":
+                skipped += 1
             else:
                 processed += 1
 

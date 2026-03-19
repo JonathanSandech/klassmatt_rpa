@@ -91,10 +91,52 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     await safe_click(page, SELECTORS["tab_referencias"])
     await page.wait_for_load_state("networkidle")
 
-    # Verificar se já existe referência — se sim, pular (idempotente)
+    # Verificar se já existe referência com o mesmo part number
     if await _has_existing_reference(page):
-        log.info("Referência já existe — pulando")
-        return True
+        # Ler a referência existente para comparar com a planilha
+        existing_ref = await page.evaluate(
+            """() => {
+                // Procurar na tabela de referências o part number existente
+                const table = document.querySelector('#rptReferencias');
+                if (!table) {
+                    // Fallback: procurar qualquer tabela com referências
+                    const tables = document.querySelectorAll('table');
+                    for (const t of tables) {
+                        const text = t.innerText || '';
+                        if (text.includes('Part Number') || text.includes('Referência')) {
+                            const rows = t.querySelectorAll('tr');
+                            for (const row of rows) {
+                                const cells = row.querySelectorAll('td');
+                                if (cells.length >= 2) {
+                                    const cellTexts = Array.from(cells).map(c => c.innerText.trim());
+                                    // Procurar por células que parecem part numbers (alfanumérico longo)
+                                    for (const txt of cellTexts) {
+                                        if (txt && txt.length > 5 && /^[A-Z0-9]/i.test(txt)) {
+                                            return {partNumber: txt, found: true};
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Procurar nas spans/cells visíveis
+                const spans = document.querySelectorAll('#tabReferencias td, #tabReferencias span');
+                const texts = Array.from(spans).map(s => s.innerText.trim()).filter(t => t.length > 5);
+                return {partNumber: texts.length > 0 ? texts.join(' | ') : '', found: texts.length > 0};
+            }"""
+        )
+        if existing_ref and existing_ref.get("found"):
+            existing_pn = existing_ref.get("partNumber", "")
+            if part_number in existing_pn or existing_pn in part_number:
+                log.info(f"Referência já existe com part number correto ({part_number}) — pulando")
+                return True
+            else:
+                log.info(f"Referência existente ({existing_pn}) difere da planilha ({part_number}) — mantendo existente")
+                return True
+        else:
+            log.info("Referência já existe — pulando")
+            return True
 
     # Clicar no botão ADD para nova referência (iButAddRef, não Imagebutton22 que é EDIT)
     add_btn = page.locator("#iButAddRef")
