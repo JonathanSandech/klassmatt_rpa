@@ -231,23 +231,15 @@ async def fix_sin(page, sin: str, item: dict) -> str:
                 log.error(f"  Falha ao retornar etapa — pulando SIN {sin}")
                 return "error"
 
-        # Atuar no Item — navega na mesma aba para ITEM_Edita.aspx
-        # Pode gerar confirm dialog ("outro usuário atuando") que o handler aceita
-        atuar_btn = item_page.locator("input[value='Atuar no Item']")
-        if await atuar_btn.count() > 0:
-            try:
-                await atuar_btn.click(timeout=15_000)
-            except Exception:
-                # Dialog pode ter bloqueado — tentar JS click
-                await item_page.evaluate("""() => {
-                    const btn = document.querySelector("input[value='Atuar no Item']");
-                    if (btn) btn.click();
-                }""")
-            await item_page.wait_for_load_state("networkidle")
-            await item_page.wait_for_timeout(2000)
-        else:
-            log.warning("  Botão 'Atuar no Item' não encontrado")
-
+        # Atuar no Item — __doPostBack direto (confirmado via MCP que
+        # Playwright click() no submit button não trigga o postback ASP.NET)
+        await item_page.evaluate("""() => {
+            window.confirm = () => true;
+            window.alert = () => {};
+            __doPostBack('ctl00$Body$butAcao3', '');
+        }""")
+        await item_page.wait_for_load_state("networkidle")
+        await item_page.wait_for_timeout(2000)
         await hide_overlays(item_page)
         log.debug(f"  Página de edição: {item_page.url}")
 

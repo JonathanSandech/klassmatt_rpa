@@ -44,9 +44,18 @@ async def validate_sap_description(page: Page) -> None:
     log.info(f"Tamanho da descrição SAP: {tamanho}/40")
 
     if tamanho > 40:
-        log.info("Tamanho > 40 — desmarcando 'Exibe D2'")
+        log.info("Tamanho > 40 — verificando Exibe D2")
 
         await _click_tab(page, "Referências")
+
+        # Verificar se existe referência e botão de edição antes de abrir o form
+        has_edit_btn = await page.evaluate(
+            """() => !!document.querySelector("[id$='Imagebutton22']")"""
+        )
+        if not has_edit_btn:
+            log.debug("Sem referência para editar Exibe D2 — pulando")
+            log.info("Validação SAP concluída")
+            return
 
         # Editar referência existente via JS
         await page.evaluate(
@@ -107,19 +116,24 @@ async def validate_sap_description(page: Page) -> None:
                 except Exception:
                     continue
         else:
-            # Não mudou nada — descartar edição voltando à aba via JS
-            # para limpar o dirty state do formulário
+            # Não mudou nada — cancelar edição da referência
+            # Override confirm para aceitar "alterações não salvas" automaticamente
             await page.evaluate(
                 """() => {
+                    window.confirm = () => true;
+                    window.alert = () => {};
+                    // Clicar no botão Adicionar (iButAddRef) força sair do modo edição
+                    // Ou navegar via __doPostBack para Dados Básicos
                     const tabs = document.querySelectorAll('a');
                     const tab = Array.from(tabs).find(a => a.innerText.includes('Dados Básicos'));
                     if (tab) tab.click();
                 }"""
             )
             try:
-                await page.wait_for_load_state("networkidle", timeout=5_000)
+                await page.wait_for_load_state("networkidle", timeout=10_000)
             except Exception:
                 pass
+            await page.wait_for_timeout(1000)
 
         # Garantir que voltamos à página de edição do item (não ficamos em página de aviso)
         if "ITEM_Edita" not in page.url:
