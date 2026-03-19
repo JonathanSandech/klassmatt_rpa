@@ -315,24 +315,49 @@ async def verify_sin(page, sin: str, item: dict) -> dict:
     }
     start = time.time()
 
+    # Guardar referência à aba original (worklist)
+    worklist_page = page
+    item_page = page  # será atualizado se abrir nova aba
+
     try:
         await _navigate_to_worklist(page)
+
+        # Guardar número de abas antes de abrir o SIN
+        pages_before = len(page.context.pages)
         await _search_and_open_sin(page, sin)
 
+        # Detectar se abriu nova aba (OpenNewTab do Klassmatt)
+        await page.wait_for_timeout(2000)
+        if len(page.context.pages) > pages_before:
+            item_page = page.context.pages[-1]
+            await item_page.wait_for_load_state("networkidle")
+            await item_page.wait_for_timeout(1000)
+            log.debug(f"  Nova aba detectada: {item_page.url}")
+        else:
+            item_page = page
+
         # Status
-        item_status = await _read_status(page)
+        item_status = await _read_status(item_page)
         result["item_status"] = item_status
 
         # Atuar no Item para acessar os dados
-        await page.evaluate("""() => {
+        await item_page.evaluate("""() => {
             const btn = document.querySelector("input[value='Atuar no Item']");
             if (btn) btn.click();
         }""")
-        await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(2000)
+        await item_page.wait_for_load_state("networkidle")
+        await item_page.wait_for_timeout(2000)
+
+        # Detectar se "Atuar no Item" abriu mais uma aba
+        if len(page.context.pages) > len([item_page, worklist_page]):
+            for p in page.context.pages:
+                if p != worklist_page and p != item_page and "ITEM_Edita" in p.url:
+                    item_page = p
+                    await item_page.wait_for_load_state("networkidle")
+                    break
 
         # Esconder overlays
-        await page.evaluate("""() => {
+        await item_page.evaluate("""() => {
             const div1 = document.querySelector('#div1');
             if (div1) div1.style.pointerEvents = 'none';
             const pg2 = document.querySelector('#pg-2');
@@ -341,7 +366,7 @@ async def verify_sin(page, sin: str, item: dict) -> dict:
 
         # ── UNSPSC ──
         if item.get("unspsc"):
-            actual_unspsc = await _read_unspsc(page)
+            actual_unspsc = await _read_unspsc(item_page)
             expected_unspsc = str(item["unspsc"]).strip()
             diff = _compare(expected_unspsc, actual_unspsc, "UNSPSC")
             if diff:
@@ -349,14 +374,14 @@ async def verify_sin(page, sin: str, item: dict) -> dict:
 
         # ── NCM ──
         if item.get("ncm"):
-            actual_ncm = await _read_ncm(page)
+            actual_ncm = await _read_ncm(item_page)
             expected_ncm = _format_ncm(str(item["ncm"]))
             diff = _compare(expected_ncm, actual_ncm, "NCM")
             if diff:
                 result["diffs"].append(diff)
 
         # ── Referências ──
-        actual_refs = await _read_references(page)
+        actual_refs = await _read_references(item_page)
         if item.get("part_number"):
             expected_pn = str(item["part_number"]).strip()
             found_pn = any(
@@ -377,7 +402,7 @@ async def verify_sin(page, sin: str, item: dict) -> dict:
             })
 
         # ── Relacionamentos ──
-        actual_rels = await _read_relationships(page)
+        actual_rels = await _read_relationships(item_page)
         if item.get("codigo_60"):
             expected_code = str(item["codigo_60"]).strip()
             matching = [r for r in actual_rels if r["tipo"].upper() == RELATIONSHIP_TYPE.upper()]
@@ -403,7 +428,7 @@ async def verify_sin(page, sin: str, item: dict) -> dict:
                     )
 
         # ── Mídias ──
-        actual_media = await _read_media_count(page)
+        actual_media = await _read_media_count(item_page)
         doc_files = item.get("_doc_files", [])
         expected_docs = len(doc_files) if doc_files else 0
         if expected_docs > 0 and actual_media == 0:
@@ -418,7 +443,7 @@ async def verify_sin(page, sin: str, item: dict) -> dict:
             )
 
         # ── PDM / Atributos ──
-        pdm_data = await _read_pdm_and_attributes(page)
+        pdm_data = await _read_pdm_and_attributes(item_page)
         if item.get("pdm") and not pdm_data.get("padronizado", True):
             result["diffs"].append({
                 "field": "PDM",
@@ -452,6 +477,15 @@ async def verify_sin(page, sin: str, item: dict) -> dict:
         result["status"] = "error"
         result["diffs"].append({"field": "ERRO", "expected": "", "actual": str(e)})
         log.error(f"  Erro ao verificar SIN {sin}: {e}")
+
+    finally:
+        # Fechar abas extras abertas pelo Klassmatt (OpenNewTab)
+        if item_page != worklist_page:
+            try:
+                if not item_page.is_closed():
+                    await item_page.close()
+            except Exception:
+                pass
 
     if result["diffs"]:
         result["status"] = "divergente"
