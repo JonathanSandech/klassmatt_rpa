@@ -70,7 +70,11 @@ async def _navigate_to_worklist(page):
 
 
 async def _search_and_open_sin(page, sin: str):
-    """Busca SIN na worklist e abre a página do item."""
+    """Busca SIN na worklist e abre a página do item.
+
+    O link da worklist usa OpenNewTab() que abre SIN_Item_Resultante em nova aba.
+    Retorna a page da nova aba (ou a mesma page se navegou inline).
+    """
     await page.evaluate(f"""() => {{
         const ta = document.querySelector("textarea[name$='txtValor']");
         if (ta) ta.value = '{sin}';
@@ -78,19 +82,30 @@ async def _search_and_open_sin(page, sin: str):
     }}""")
     await page.wait_for_timeout(5000)
 
-    # Abrir SIN
+    # Clicar no link do resultado — usa OpenNewTab, abre em nova aba
+    pages_before = len(page.context.pages)
     found = await page.evaluate(f"""() => {{
-        const link = document.querySelector("a[href*='abreSIN({sin})']");
-        if (link) {{ link.click(); return true; }}
-        // Fallback: clicar no primeiro resultado
         const results = document.querySelectorAll('#DIVResultado .result a');
         if (results.length > 0) {{ results[0].click(); return true; }}
         return false;
     }}""")
     if not found:
         raise RuntimeError(f"SIN {sin} não encontrado na worklist")
-    await page.wait_for_load_state("networkidle")
+
+    # Esperar a nova aba abrir
     await page.wait_for_timeout(3000)
+
+    # Retornar a nova aba se abriu
+    if len(page.context.pages) > pages_before:
+        new_page = page.context.pages[-1]
+        new_page.on("dialog", handle_dialog)  # Registrar dialog handler na nova aba
+        await new_page.wait_for_load_state("networkidle")
+        await new_page.wait_for_timeout(1000)
+        return new_page
+
+    # Fallback: navegou na mesma aba
+    await page.wait_for_load_state("networkidle")
+    return page
 
 
 async def _get_status(page) -> str:
@@ -202,17 +217,9 @@ async def fix_sin(page, sin: str, item: dict) -> str:
     try:
         await _navigate_to_worklist(page)
 
-        # Guardar número de abas antes de abrir o SIN
-        pages_before = len(page.context.pages)
-        await _search_and_open_sin(page, sin)
-
-        # Detectar se abriu nova aba (OpenNewTab do Klassmatt)
-        await page.wait_for_timeout(2000)
-        if len(page.context.pages) > pages_before:
-            item_page = page.context.pages[-1]
-            await item_page.wait_for_load_state("networkidle")
-            await item_page.wait_for_timeout(1000)
-            log.debug(f"  Nova aba detectada: {item_page.url}")
+        # Abrir SIN — retorna a aba onde o item está
+        item_page = await _search_and_open_sin(page, sin)
+        log.debug(f"  Aba do item: {item_page.url}")
 
         # Checar status
         status = await _get_status(item_page)
@@ -224,8 +231,25 @@ async def fix_sin(page, sin: str, item: dict) -> str:
                 log.error(f"  Falha ao retornar etapa — pulando SIN {sin}")
                 return "error"
 
-        # Atuar no Item
-        await _atuar_no_item(item_page)
+        # Atuar no Item — navega na mesma aba para ITEM_Edita.aspx
+        # Pode gerar confirm dialog ("outro usuário atuando") que o handler aceita
+        atuar_btn = item_page.locator("input[value='Atuar no Item']")
+        if await atuar_btn.count() > 0:
+            try:
+                await atuar_btn.click(timeout=15_000)
+            except Exception:
+                # Dialog pode ter bloqueado — tentar JS click
+                await item_page.evaluate("""() => {
+                    const btn = document.querySelector("input[value='Atuar no Item']");
+                    if (btn) btn.click();
+                }""")
+            await item_page.wait_for_load_state("networkidle")
+            await item_page.wait_for_timeout(2000)
+        else:
+            log.warning("  Botão 'Atuar no Item' não encontrado")
+
+        await hide_overlays(item_page)
+        log.debug(f"  Página de edição: {item_page.url}")
 
         # Re-checar status após Atuar
         status = await _get_status(item_page)
