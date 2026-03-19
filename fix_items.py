@@ -196,71 +196,84 @@ async def fix_sin(page, sin: str, item: dict) -> str:
     log.info(f"{'='*50}")
 
     start = time.time()
+    worklist_page = page
+    item_page = page  # será atualizado se abrir nova aba
 
-    await _navigate_to_worklist(page)
-    await _search_and_open_sin(page, sin)
-
-    # Checar status
-    status = await _get_status(page)
-    log.info(f"  Status atual: {status}")
-
-    if status == "APROVACAO-TECNICA":
-        ok = await _retornar_etapa(page)
-        if not ok:
-            log.error(f"  Falha ao retornar etapa — pulando SIN {sin}")
-            return "error"
-
-    # Atuar no Item
-    await _atuar_no_item(page)
-
-    # Re-checar status após Atuar
-    status = await _get_status(page)
-    if status and status != "FINALIZACAO":
-        log.warning(f"  Status '{status}' após Atuar — não editável, pulando")
-        return "skipped"
-
-    # Reprocessar todas as etapas (cada uma é idempotente)
     try:
+        await _navigate_to_worklist(page)
+
+        # Guardar número de abas antes de abrir o SIN
+        pages_before = len(page.context.pages)
+        await _search_and_open_sin(page, sin)
+
+        # Detectar se abriu nova aba (OpenNewTab do Klassmatt)
+        await page.wait_for_timeout(2000)
+        if len(page.context.pages) > pages_before:
+            item_page = page.context.pages[-1]
+            await item_page.wait_for_load_state("networkidle")
+            await item_page.wait_for_timeout(1000)
+            log.debug(f"  Nova aba detectada: {item_page.url}")
+
+        # Checar status
+        status = await _get_status(item_page)
+        log.info(f"  Status atual: {status}")
+
+        if status == "APROVACAO-TECNICA":
+            ok = await _retornar_etapa(item_page)
+            if not ok:
+                log.error(f"  Falha ao retornar etapa — pulando SIN {sin}")
+                return "error"
+
+        # Atuar no Item
+        await _atuar_no_item(item_page)
+
+        # Re-checar status após Atuar
+        status = await _get_status(item_page)
+        if status and status != "FINALIZACAO":
+            log.warning(f"  Status '{status}' após Atuar — não editável, pulando")
+            return "skipped"
+
+        # Reprocessar todas as etapas (cada uma é idempotente)
         # UNSPSC
         if item.get("unspsc"):
-            await fill_unspsc(page, str(item["unspsc"]))
+            await fill_unspsc(item_page, str(item["unspsc"]))
             log.info(f"  UNSPSC: {item['unspsc']}")
 
         # NCM
         if item.get("ncm"):
-            await fill_ncm(page, str(item["ncm"]))
+            await fill_ncm(item_page, str(item["ncm"]))
             log.info(f"  NCM: {item['ncm']}")
 
         # Referências
         if item.get("empresa") and item.get("part_number"):
-            await fill_reference(page, str(item["empresa"]), str(item["part_number"]))
+            await fill_reference(item_page, str(item["empresa"]), str(item["part_number"]))
             log.info(f"  Referência: {item['empresa']} / {item['part_number']}")
 
         # Relacionamento
         if item.get("codigo_60"):
-            await fill_relationship(page, str(item["codigo_60"]))
+            await fill_relationship(item_page, str(item["codigo_60"]))
             log.info(f"  Relacionamento: {item['codigo_60']}")
 
         # Upload de documentos
         doc_files = item.get("_doc_files", [])
         if doc_files:
-            await upload_documents(page, doc_files)
+            await upload_documents(item_page, doc_files)
             log.info(f"  Mídias: {len(doc_files)} doc(s)")
 
         # Validação SAP
-        await validate_sap_description(page)
+        await validate_sap_description(item_page)
 
         # PDM
         if item.get("pdm"):
-            await change_pdm(page, str(item["pdm"]))
+            await change_pdm(item_page, str(item["pdm"]))
             log.info(f"  PDM: {item['pdm']}")
 
         # Atributos
-        await fill_attributes(page, item.get("attributes", []))
+        await fill_attributes(item_page, item.get("attributes", []))
 
         # Remeter
         if REMETER_APOS_FIX:
-            await _remeter_modec(page)
+            await _remeter_modec(item_page)
         else:
             log.info("  Remeter DESABILITADO — item mantido em FINALIZACAO")
 
@@ -269,6 +282,15 @@ async def fix_sin(page, sin: str, item: dict) -> str:
         elapsed = time.time() - start
         log.info(f"  Tempo: {elapsed:.1f}s")
         return "error"
+
+    finally:
+        # Fechar aba extra aberta pelo Klassmatt
+        if item_page != worklist_page:
+            try:
+                if not item_page.is_closed():
+                    await item_page.close()
+            except Exception:
+                pass
 
     elapsed = time.time() - start
     log.info(f"  SIN {sin} corrigido em {elapsed:.1f}s")
