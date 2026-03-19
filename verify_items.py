@@ -94,29 +94,18 @@ async def _read_unspsc(page) -> str:
     await page.wait_for_timeout(1000)
 
     return await page.evaluate("""() => {
-        // Procurar no grid de classificações o código UNSPSC
-        const cells = document.querySelectorAll('td, span');
+        // Input #txtUNSPSC contém "31401503. O ring molded gasket" — extrair 8 dígitos
+        const inp = document.querySelector('#txtUNSPSC');
+        if (inp && inp.value) {
+            const m = inp.value.match(/^(\\d{8})/);
+            if (m) return m[1];
+        }
+        // Fallback: procurar em qualquer input/td/span com 8 dígitos
+        const cells = document.querySelectorAll('td, span, input');
         for (const cell of cells) {
-            const text = cell.innerText.trim();
-            // UNSPSC é um código de 8 dígitos
-            if (/^\\d{8}$/.test(text)) return text;
-        }
-        // Fallback: procurar input com valor de 8 dígitos
-        const inputs = document.querySelectorAll('input[type="text"]');
-        for (const inp of inputs) {
-            if (/^\\d{8}$/.test(inp.value.trim())) return inp.value.trim();
-        }
-        // Fallback: procurar no checkbox de seleção
-        const ck = document.querySelector('#ckSelUNSPSC');
-        if (ck) {
-            const row = ck.closest('tr');
-            if (row) {
-                const tds = row.querySelectorAll('td');
-                for (const td of tds) {
-                    const m = td.innerText.trim().match(/\\d{8}/);
-                    if (m) return m[0];
-                }
-            }
+            const text = (cell.value || cell.innerText || '').trim();
+            const m = text.match(/^(\\d{8})/);
+            if (m) return m[1];
         }
         return '';
     }""")
@@ -150,21 +139,19 @@ async def _read_references(page) -> list[dict]:
 
     return await page.evaluate("""() => {
         const result = [];
-        // Procurar na tabela de referências (rptReferencias)
-        const tables = document.querySelectorAll('table');
-        for (const table of tables) {
-            const rows = table.querySelectorAll('tr');
-            for (const row of rows) {
-                const cells = row.querySelectorAll('td');
-                if (cells.length >= 3) {
-                    const texts = Array.from(cells).map(c => c.innerText.trim());
-                    // Procurar rows que parecem ter empresa + part number
-                    // (ignorar headers e rows vazias)
-                    const hasData = texts.some(t => t.length > 3 && /[A-Z0-9]/i.test(t));
-                    const isHeader = texts.some(t => t === 'Empresa' || t === 'Referência');
-                    if (hasData && !isHeader) {
-                        result.push({empresa: texts[0] || '', partNumber: texts[1] || '', raw: texts.join(' | ')});
-                    }
+        // divReferencias contém "Referência/Fabricante: {partNumber}/{empresa}"
+        const div = document.querySelector('#divReferencias');
+        if (div) {
+            const text = div.innerText || '';
+            // Pode ter múltiplas referências; cada uma tem "Referência/Fabricante:"
+            const matches = text.match(/Referência\\/Fabricante:\\s*([^\\n]+)/g);
+            if (matches) {
+                for (const m of matches) {
+                    const val = m.replace('Referência/Fabricante:', '').trim();
+                    const parts = val.split('/');
+                    const partNumber = (parts[0] || '').trim();
+                    const empresa = parts.slice(1).join('/').trim();
+                    result.push({partNumber, empresa, raw: val});
                 }
             }
         }
