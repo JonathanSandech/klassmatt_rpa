@@ -57,6 +57,69 @@ class StepTimer:
         return "\n".join(lines)
 
 
+class KlassmattSessionError(Exception):
+    """Erro de sessão do Klassmatt — requer fechar e reabrir browser."""
+    pass
+
+
+async def _check_page_error(page) -> bool:
+    """Verifica se a página atual é a tela de erro do Klassmatt."""
+    try:
+        text = await page.evaluate("() => document.body.innerText.substring(0, 500)")
+        return "exce" in text.lower() or "ACESSO" in text
+    except Exception:
+        return False
+
+
+async def _voltar_worklist(page) -> None:
+    """Volta para a worklist via JS (padrão fix_items.py).
+
+    Mais resiliente que safe_click — funciona mesmo com overlays.
+    Se detectar página de erro/exceção, levanta KlassmattSessionError
+    para que o caller feche e reabra o browser.
+    """
+    # Verificar se já estamos na página de erro
+    if await _check_page_error(page):
+        raise KlassmattSessionError("Página de erro detectada antes de navegar")
+
+    # Navegar para Principal via JS
+    await page.evaluate("""() => {
+        const links = document.querySelectorAll('a');
+        const p = Array.from(links).find(a => a.innerText.trim() === 'Principal');
+        if (p) p.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(2000)
+
+    # Verificar se caiu em página de erro
+    if await _check_page_error(page):
+        raise KlassmattSessionError("Página de erro após navegar para Principal")
+
+    # Navegar para Worklist via JS
+    await page.evaluate("""() => {
+        const links = document.querySelectorAll('a');
+        const wl = Array.from(links).find(a => a.innerText.includes('Acompanhamento das Solicita'));
+        if (wl) wl.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(2000)
+
+    # Verificar se pesquisar() está disponível (worklist carregada)
+    ready = await page.evaluate("() => typeof pesquisar === 'function'")
+    if ready:
+        await page.select_option(
+            SELECTORS["worklist_filter_dropdown"],
+            label="Todas as Solicitações",
+        )
+        await page.evaluate("() => { pesquisar(0, ''); }")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(3000)
+        log.info("Worklist filtrada: Todas as Solicitações")
+        return
+
+    raise KlassmattSessionError("Worklist não carregou — pesquisar() indisponível")
+
+
 async def process_item(page, item: dict, wb) -> str:
     """Processa um único item do Excel.
 
@@ -85,15 +148,13 @@ async def process_item(page, item: dict, wb) -> str:
     # 2b. Verificar status do item no workflow
     item_status = await check_item_already_processed(page)
     if item_status:
-        # Item não está em FINALIZACAO — campos readonly, não podemos editar
-        # Marcar como "needs_review" para que fix_items.py trate via Retornar Etapa
-        log.warning(f"Item em '{item_status}' — não editável, marcando para revisão")
+        # Item não está em FINALIZACAO — pular
+        log.info(f"Item em '{item_status}' — pulando")
         t.mark(f"Status: {item_status}")
-        await navigate_home(page)
-        await navigate_to_worklist(page)
+        await _voltar_worklist(page)
         t.mark("Voltar Worklist")
         log.info(f"\n{t.summary()}")
-        return "needs_review"
+        return "skipped"
 
     # 3. Criar Item → Finalizar → Salvar → Sim
     await criar_item(page)
@@ -152,9 +213,10 @@ async def process_item(page, item: dict, wb) -> str:
     log.info("Remeter MODEC DESABILITADO — item mantido em FINALIZACAO para revisão")
     t.mark("(Remeter desabilitado)")
 
-    # Voltar para worklist
-    await navigate_home(page)
-    await navigate_to_worklist(page)
+    # Voltar para worklist (mesmo padrão do fix_items.py)
+    # Delay maior para evitar rate limiting do Klassmatt após salvar atributos
+    await page.wait_for_timeout(10_000)
+    await _voltar_worklist(page)
     t.mark("Voltar Worklist")
 
     log.info(f"\n{t.summary()}")
@@ -162,11 +224,35 @@ async def process_item(page, item: dict, wb) -> str:
     return "ok"
 
 
-async def process_item_with_retry(page, context, item: dict, wb, progress: dict) -> tuple:
+async def _restart_browser(pw, context) -> tuple:
+    """Fecha browser e reabre. Retorna (context, page)."""
+    log.warning("Fechando browser e reabrindo...")
+    try:
+        await context.close()
+    except Exception:
+        pass
+    try:
+        await pw.stop()
+    except Exception:
+        pass
+    # Aguardar processos morrerem
+    await asyncio.sleep(5)
+    new_pw, new_context, new_page = await launch_browser()
+    await navigate_home(new_page)
+    sessao_ok = await verificar_sessao(new_page)
+    if not sessao_ok:
+        log.warning("Sessão expirada após reabrir — aguardando 60s para re-login manual")
+        await asyncio.sleep(60)
+        await new_page.reload(wait_until="networkidle")
+    await _voltar_worklist(new_page)
+    return new_pw, new_context, new_page
+
+
+async def process_item_with_retry(page, context, pw, item: dict, wb, progress: dict) -> tuple:
     """Executa process_item com retry e recuperação de erro.
 
     Padrão do bot_pso: retry com backoff crescente.
-    Retorna (status, page) — page pode ser recriada se houver erro grave.
+    Retorna (status, page, context, pw) — browser pode ser recriado.
     """
     sin = str(item.get("sin", ""))
     row = item["_row"]
@@ -177,7 +263,17 @@ async def process_item_with_retry(page, context, item: dict, wb, progress: dict)
             mark_item(progress, sin, status)
             color_row(wb, row, status)
             save_excel(wb)
-            return status, page
+            return status, page, context, pw
+
+        except KlassmattSessionError as e:
+            log.error(f"Erro de sessão Klassmatt SIN {sin}: {e}")
+            pw, context, page = await _restart_browser(pw, context)
+            if attempt >= MAX_RETRIES:
+                mark_item(progress, sin, "error", str(e))
+                color_row(wb, row, "error")
+                save_excel(wb)
+                return "error", page, context, pw
+            continue
 
         except Exception as e:
             log.error(
@@ -190,57 +286,40 @@ async def process_item_with_retry(page, context, item: dict, wb, progress: dict)
                 log.info(f"Aguardando {delay:.0f}s antes da próxima tentativa...")
                 await asyncio.sleep(delay)
 
-                # Recuperar: voltar para home e worklist
+                # Recuperar: voltar para worklist
                 try:
-                    await navigate_home(page)
-                    sessao_ok = await verificar_sessao(page)
-                    if not sessao_ok:
-                        log.warning("Sessao expirada -- aguardando 60s para re-login manual")
-                        await asyncio.sleep(60)
-                        await page.reload(wait_until="networkidle")
-                    await navigate_to_worklist(page)
+                    await _voltar_worklist(page)
+                except KlassmattSessionError:
+                    log.warning("Sessão perdida na recuperação — reiniciando browser")
+                    pw, context, page = await _restart_browser(pw, context)
                 except Exception as recovery_error:
                     log.error(f"Falha na recuperacao: {recovery_error}")
-                    # Fechar abas extras antes de recriar
-                    for p in context.pages[1:]:
-                        try:
-                            await p.close()
-                        except Exception:
-                            pass
-                    page = await context.new_page()
-                    page.on("dialog", _handle_dialog)
-                    await navigate_home(page)
-                    await navigate_to_worklist(page)
+                    try:
+                        pw, context, page = await _restart_browser(pw, context)
+                    except Exception:
+                        log.error("Falha ao reiniciar browser")
+                        raise
             else:
-                # Esgotou tentativas — pausar para inspeção
                 mark_item(progress, sin, "error", str(e))
                 color_row(wb, row, "error")
                 save_excel(wb)
-
                 log.error(
                     f"SIN {sin} falhou apos {MAX_RETRIES} tentativas. "
                     f"Continuando com proximo item."
                 )
-
                 # Recuperar para o próximo item
                 try:
-                    await navigate_home(page)
-                    await navigate_to_worklist(page)
-                except Exception as recovery_error:
-                    log.error(f"Falha na recuperacao final: {recovery_error}")
-                    for p in context.pages[1:]:
-                        try:
-                            await p.close()
-                        except Exception:
-                            pass
-                    page = await context.new_page()
-                    page.on("dialog", _handle_dialog)
-                    await navigate_home(page)
-                    await navigate_to_worklist(page)
+                    await _voltar_worklist(page)
+                except Exception:
+                    try:
+                        pw, context, page = await _restart_browser(pw, context)
+                    except Exception:
+                        log.error("Falha ao reiniciar browser para próximo item")
+                        raise
 
-                return "error", page
+                return "error", page, context, pw
 
-    return "error", page
+    return "error", page, context, pw
 
 
 async def run() -> None:
@@ -310,13 +389,13 @@ async def run() -> None:
                 await asyncio.sleep(5)
 
             item_start = time.time()
-            status, page = await process_item_with_retry(page, context, item, wb, progress)
+            status, page, context, pw = await process_item_with_retry(page, context, pw, item, wb, progress)
             item_elapsed = time.time() - item_start
             item_times.append(item_elapsed)
 
             if status == "error":
                 errors += 1
-            elif status == "needs_review":
+            elif status in ("needs_review", "skipped"):
                 skipped += 1
             else:
                 processed += 1

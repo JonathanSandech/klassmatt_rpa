@@ -44,11 +44,71 @@ async def search_and_select_sin(page: Page, sin: str) -> None:
 
 
 async def atuar_no_item(page: Page) -> None:
-    """Clica em 'Atuar no Item' e aguarda navegação para página de edição."""
+    """Clica em 'Atuar no Item' e aguarda navegação para página de edição.
+
+    Para SINs em CATALOGACAO-MODEC, o abreSIN() abre SIN_Resumo com botão
+    'Atuar na SIN' (butAcao3) em vez de 'Atuar no Item'. Nesse caso:
+    1. Atuar na SIN → aparece 'Criar item'
+    2. Criar item → vai para DescricaoV3
+    3. Finalizar → volta para ITEM_Edita
+    4. Salvar → Sim → item criado em FINALIZACAO
+    """
+    # Se já estamos em ITEM_Edita.aspx, não precisa clicar
+    if "ITEM_Edita.aspx" in page.url:
+        log.debug("Já em ITEM_Edita.aspx — pulando 'Atuar no Item'")
+        return
+
     # Override confirm para aceitar "outro usuário atuando" automaticamente
     await page.evaluate("() => { window.confirm = () => true; }")
+
+    # Verificar se tem "Atuar na SIN" (CATALOGACAO-MODEC) em vez de "Atuar no Item"
+    atuar_sin = await page.evaluate("""() => {
+        const btn = document.querySelector('#butAcao3');
+        return btn && btn.value === 'Atuar na SIN' && btn.offsetParent !== null;
+    }""")
+
+    if atuar_sin:
+        log.info("SIN em CATALOGACAO-MODEC — executando fluxo Atuar na SIN → Criar item")
+        # 1. Atuar na SIN
+        await page.evaluate("() => { document.querySelector('#butAcao3').click(); }")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(3000)
+
+        # 2. Criar item (butAcao2)
+        criar_btn = page.locator("#butAcao2")
+        if await criar_btn.count() > 0:
+            await page.evaluate("() => { document.querySelector('#butAcao2').click(); }")
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(2000)
+
+            # 3. Finalizar na DescricaoV3
+            finalizar = page.locator("#butFinaliza")
+            if await finalizar.count() > 0:
+                await page.evaluate("() => { document.querySelector('#butFinaliza').click(); }")
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(2000)
+
+            # 4. Salvar na ITEM_Edita
+            salvar = page.locator("#butSalvar")
+            if await salvar.count() > 0:
+                await page.evaluate("() => { document.querySelector('#butSalvar').click(); }")
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(2000)
+
+            # 5. Sim (confirmar criação)
+            sim = page.locator("#butSim")
+            if await sim.count() > 0:
+                await page.evaluate("() => { document.querySelector('#butSim').click(); }")
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(2000)
+
+            log.info("Item criado via fluxo CATALOGACAO-MODEC")
+        else:
+            log.warning("Botão 'Criar item' não encontrado após 'Atuar na SIN'")
+        return
+
+    # Fluxo normal: Atuar no Item (FINALIZACAO)
     await safe_click(page, SELECTORS["atuar_no_item_btn"])
-    # Aguardar navegação completa (muda de SIN_Item_Resultante → ITEM_Edita)
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
     await page.wait_for_load_state("domcontentloaded")

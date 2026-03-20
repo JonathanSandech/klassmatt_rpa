@@ -223,12 +223,15 @@ async def change_pdm(page: Page, pdm: str) -> None:
         log.warning("Botão 'Alterar Padrão' não encontrado — PDM pode já estar definido")
         return
 
-    await page.evaluate(
-        """() => {
-            const btn = document.querySelector("input[value='Alterar Padrão']");
-            if (btn) btn.click();
-        }"""
-    )
+    try:
+        await page.evaluate(
+            """() => {
+                const btn = document.querySelector("input[value='Alterar Padrão']");
+                if (btn) btn.click();
+            }"""
+        )
+    except Exception:
+        pass  # Esperado: navegação destrói contexto, mas o clique já foi disparado
     # "Alterar Padrão" navega para Pesquisa_Item.aspx (página diferente)
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
@@ -262,12 +265,16 @@ async def change_pdm(page: Page, pdm: str) -> None:
 
     # Clicar em "Definir Padrão" via JS
     # Isso navega de volta para ITEM_Edita_DescricaoV3.aspx
-    await page.evaluate(
-        """() => {
-            const btn = document.querySelector("input[value='Definir Padrão']");
-            if (btn) btn.click();
-        }"""
-    )
+    # O clique causa navegação que destrói o contexto JS antes do evaluate retornar
+    try:
+        await page.evaluate(
+            """() => {
+                const btn = document.querySelector("input[value='Definir Padrão']");
+                if (btn) btn.click();
+            }"""
+        )
+    except Exception:
+        pass  # Esperado: navegação destrói contexto, mas o clique já foi disparado
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(3000)
 

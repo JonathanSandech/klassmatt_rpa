@@ -43,4 +43,4 @@ def mark_item(progress: dict, sin: str, status: str, error: str = "") -> None:
 def is_processed(progress: dict, sin: str) -> bool:
     """Verifica se um item já foi processado com sucesso."""
     item = progress.get("items", {}).get(sin)
-    return item is not None and item["status"] == "ok"
+    return item is not None and item["status"] in ("ok", "skipped")
