@@ -13,7 +13,7 @@ from browser import (
     launch_browser, navigate_home, retry_action,
     verificar_sessao, fechar_popups, _handle_dialog, hide_overlays,
 )
-from excel_handler import load_excel, color_row, save_excel, validate_documents
+from excel_handler import load_excel, color_row, save_excel, validate_documents, enrich_missing_data
 from state import load_progress, mark_item, is_processed
 from logger import log
 
@@ -120,14 +120,16 @@ async def _voltar_worklist(page) -> None:
     raise KlassmattSessionError("Worklist não carregou — pesquisar() indisponível")
 
 
-async def process_item(page, item: dict, wb) -> str:
+async def process_item(page, item: dict, wb) -> tuple[str, list[str]]:
     """Processa um único item do Excel.
 
-    Retorna: 'ok', 'duplicate', 'error', ou 'skipped'.
+    Retorna: (status, warnings) onde status é 'ok', 'needs_review',
+    'duplicate', 'error', ou 'skipped'.
     """
     sin = str(item["sin"])
     row = item["_row"]
     t = StepTimer(sin)
+    warnings: list[str] = []
 
     log.info(f"{'='*60}")
     log.info(f"Processando SIN {sin} (linha {row})")
@@ -154,7 +156,7 @@ async def process_item(page, item: dict, wb) -> str:
         await _voltar_worklist(page)
         t.mark("Voltar Worklist")
         log.info(f"\n{t.summary()}")
-        return "skipped"
+        return "skipped", []
 
     # 3. Criar Item → Finalizar → Salvar → Sim
     await criar_item(page)
@@ -162,13 +164,17 @@ async def process_item(page, item: dict, wb) -> str:
 
     # 4. UNSPSC
     if item.get("unspsc"):
-        await fill_unspsc(page, str(item["unspsc"]))
+        unspsc_ok = await fill_unspsc(page, str(item["unspsc"]))
         t.mark("UNSPSC")
+        if not unspsc_ok:
+            warnings.append("unspsc_not_found")
 
     # 5. Fiscal — NCM
     if item.get("ncm"):
-        await fill_ncm(page, str(item["ncm"]))
+        ncm_ok = await fill_ncm(page, str(item["ncm"]))
         t.mark("NCM")
+        if not ncm_ok:
+            warnings.append("ncm_rejected")
 
     # 6. Referências — Empresa + Part Number
     if item.get("empresa") and item.get("part_number"):
@@ -180,12 +186,21 @@ async def process_item(page, item: dict, wb) -> str:
             await navigate_home(page)
             await navigate_to_worklist(page)
             log.info(f"\n{t.summary()}")
-            return "duplicate"
+            return "duplicate", []
+    else:
+        missing = []
+        if not item.get("empresa"):
+            missing.append("empresa")
+        if not item.get("part_number"):
+            missing.append("part_number")
+        log.warning(f"SIN {sin}: pulando Referências — campos vazios: {', '.join(missing)}")
 
     # 7. Relacionamento — CÓDIGO ANTIGO
     if item.get("codigo_60"):
         await fill_relationship(page, str(item["codigo_60"]))
         t.mark("Relacionamento")
+    else:
+        log.warning(f"SIN {sin}: pulando Relacionamento — codigo_60 vazio")
 
     # 8. Upload de documentos
     doc_files = item.get("_doc_files", [])
@@ -203,8 +218,10 @@ async def process_item(page, item: dict, wb) -> str:
         t.mark("Alterar PDM")
 
     # 11. Preencher atributos técnicos
-    await fill_attributes(page, item.get("attributes", []))
+    attrs_ok = await fill_attributes(page, item.get("attributes", []))
     t.mark("Atributos")
+    if not attrs_ok:
+        warnings.append("attributes_incomplete")
 
     # 12. Finalizar e Remeter para MODEC
     # DESABILITADO até validação completa — manter itens em FINALIZACAO
@@ -221,7 +238,10 @@ async def process_item(page, item: dict, wb) -> str:
 
     log.info(f"\n{t.summary()}")
 
-    return "ok"
+    if warnings:
+        log.warning(f"SIN {sin}: processado com problemas: {warnings}")
+        return "needs_review", warnings
+    return "ok", []
 
 
 async def _restart_browser(pw, context) -> tuple:
@@ -259,8 +279,8 @@ async def process_item_with_retry(page, context, pw, item: dict, wb, progress: d
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            status = await process_item(page, item, wb)
-            mark_item(progress, sin, status)
+            status, item_warnings = await process_item(page, item, wb)
+            mark_item(progress, sin, status, warnings=item_warnings if item_warnings else None)
             color_row(wb, row, status)
             save_excel(wb)
             return status, page, context, pw
@@ -332,6 +352,9 @@ async def run() -> None:
     # Carregar Excel
     wb, items = load_excel()
 
+    # Preencher campos vazios usando dados de itens vizinhos
+    items = enrich_missing_data(items)
+
     # Validar documentos antecipadamente
     items = validate_documents(items)
 
@@ -362,6 +385,7 @@ async def run() -> None:
         processed = 0
         errors = 0
         skipped = 0
+        needs_review = 0
 
         for idx, item in enumerate(items):
             sin = str(item.get("sin", ""))
@@ -395,7 +419,9 @@ async def run() -> None:
 
             if status == "error":
                 errors += 1
-            elif status in ("needs_review", "skipped"):
+            elif status == "needs_review":
+                needs_review += 1
+            elif status == "skipped":
                 skipped += 1
             else:
                 processed += 1
@@ -405,7 +431,8 @@ async def run() -> None:
             eta = avg_time * remaining
 
             log.info(
-                f"Progresso: {idx + 1}/{total} | OK: {processed} | Erros: {errors} | Pulados: {skipped} "
+                f"Progresso: {idx + 1}/{total} | OK: {processed} | Revisão: {needs_review} "
+                f"| Erros: {errors} | Pulados: {skipped} "
                 f"| Item: {item_elapsed:.1f}s | Média: {avg_time:.1f}s | ETA: {eta / 60:.0f}min"
             )
 
@@ -413,7 +440,7 @@ async def run() -> None:
         avg = sum(item_times) / len(item_times) if item_times else 0
 
         log.info("=" * 60)
-        log.info(f"RPA concluído! Total: {total} | OK: {processed} | Erros: {errors} | Pulados: {skipped}")
+        log.info(f"RPA concluído! Total: {total} | OK: {processed} | Revisão: {needs_review} | Erros: {errors} | Pulados: {skipped}")
         log.info(f"[timer] Tempo total: {run_elapsed:.0f}s ({run_elapsed / 60:.1f}min) | Média/item: {avg:.1f}s")
         log.info("=" * 60)
 

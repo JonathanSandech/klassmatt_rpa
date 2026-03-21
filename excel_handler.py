@@ -96,6 +96,88 @@ def save_excel(wb: openpyxl.Workbook, path: Path | None = None) -> None:
     log.debug(f"Excel salvo: {path}")
 
 
+def enrich_missing_data(items: list[dict]) -> list[dict]:
+    """Preenche campos vazios usando dados de itens vizinhos na planilha.
+
+    A planilha tem sequência lógica — itens do mesmo equipamento vêm juntos.
+    Quando um campo está vazio, busca no item anterior ou seguinte com mesmo grupo.
+    """
+    def _get_neighbor_value(items, idx, field, match_field):
+        """Busca valor de 'field' no vizinho anterior ou seguinte que compartilhe 'match_field'."""
+        current = items[idx]
+        current_match = current.get(match_field) if match_field else None
+
+        # Vizinho anterior
+        if idx > 0:
+            prev = items[idx - 1]
+            if prev.get(field):
+                if match_field is None or str(prev.get(match_field, "")) == str(current_match or ""):
+                    return prev.get(field), str(prev.get("sin", "?"))
+        # Vizinho seguinte
+        if idx < len(items) - 1:
+            nxt = items[idx + 1]
+            if nxt.get(field):
+                if match_field is None or str(nxt.get(match_field, "")) == str(current_match or ""):
+                    return nxt.get(field), str(nxt.get("sin", "?"))
+        return None, None
+
+    enriched_count = 0
+
+    for idx, item in enumerate(items):
+        sin = str(item.get("sin", "?"))
+        item.setdefault("_inferred", {})
+
+        # Empresa
+        if not item.get("empresa"):
+            value, source_sin = None, None
+            # Tentar vizinho com mesmo NCM
+            if item.get("ncm"):
+                value, source_sin = _get_neighbor_value(items, idx, "empresa", "ncm")
+            # Tentar vizinho com mesmo UNSPSC
+            if not value and item.get("unspsc"):
+                value, source_sin = _get_neighbor_value(items, idx, "empresa", "unspsc")
+            # Fallback: Part Number com prefixo ISK = BAKER HUGHES
+            if not value and item.get("part_number") and str(item["part_number"]).upper().startswith("ISK"):
+                value = "BAKER HUGHES"
+                source_sin = "regra ISK"
+            if value:
+                item["empresa"] = value
+                item["_inferred"]["empresa"] = f"{value} (de {source_sin})"
+                log.warning(f"SIN {sin}: empresa vazia, inferido '{value}' do item vizinho (SIN {source_sin})")
+                enriched_count += 1
+
+        # NCM
+        if not item.get("ncm"):
+            value, source_sin = None, None
+            if item.get("unspsc"):
+                value, source_sin = _get_neighbor_value(items, idx, "ncm", "unspsc")
+            if value:
+                item["ncm"] = value
+                item["_inferred"]["ncm"] = f"{value} (de SIN {source_sin})"
+                log.warning(f"SIN {sin}: ncm vazio, inferido '{value}' do item vizinho (SIN {source_sin})")
+                enriched_count += 1
+
+        # UNSPSC
+        if not item.get("unspsc"):
+            value, source_sin = None, None
+            if item.get("ncm"):
+                value, source_sin = _get_neighbor_value(items, idx, "unspsc", "ncm")
+            if value:
+                item["unspsc"] = value
+                item["_inferred"]["unspsc"] = f"{value} (de SIN {source_sin})"
+                log.warning(f"SIN {sin}: unspsc vazio, inferido '{value}' do item vizinho (SIN {source_sin})")
+                enriched_count += 1
+
+        # codigo_60 — não pode inferir, apenas avisar
+        if not item.get("codigo_60"):
+            log.warning(f"SIN {sin}: codigo_60 vazio — step Relacionamento será pulado")
+
+    if enriched_count:
+        log.info(f"Enriquecimento: {enriched_count} campo(s) preenchido(s) via vizinhos")
+
+    return items
+
+
 def validate_documents(items: list[dict]) -> list[dict]:
     """Valida se os arquivos de documento existem no disco antes de processar.
 

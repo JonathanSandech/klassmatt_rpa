@@ -18,7 +18,7 @@ def _attr_ctl_index(loop_index: int) -> str:
     return f"{loop_index + 1:02d}"
 
 
-async def fill_attributes(page: Page, attributes: list) -> None:
+async def fill_attributes(page: Page, attributes: list) -> bool:
     """Preenche atributos técnicos (até 30).
 
     A tabela dgDadosTecnicos fica na página ITEM_Edita_DescricaoV3.aspx,
@@ -59,13 +59,13 @@ async def fill_attributes(page: Page, attributes: list) -> None:
             await page.wait_for_timeout(1000)
         else:
             log.warning("Link 'Editar Descrição' não encontrado — pulando atributos")
-            return
+            return False
 
     # Verificar se a tabela de atributos existe
     has_grid = await page.locator("#dgDadosTecnicos").count() > 0
     if not has_grid:
         log.warning("Tabela dgDadosTecnicos não encontrada — pulando atributos")
-        return
+        return False
 
     # Contar quantos atributos existem na grid
     total_attrs = await page.evaluate(
@@ -174,6 +174,7 @@ async def fill_attributes(page: Page, attributes: list) -> None:
                     await page.wait_for_load_state("networkidle")
 
     # Finalizar para persistir os atributos (sem Finalizar, valores são perdidos)
+    _finalizar_ok = True
     if "ITEM_Edita_DescricaoV3" in page.url:
         import browser as _browser
         _browser.last_dialog_message = ""
@@ -196,8 +197,10 @@ async def fill_attributes(page: Page, attributes: list) -> None:
                 last_msg = _browser.last_dialog_message.lower()
                 if "preencher" in last_msg or "verificar" in last_msg or "dados técnicos" in last_msg:
                     log.warning(f"Finalizar rejeitado: '{_browser.last_dialog_message}' — atributos não salvos")
+                    _finalizar_ok = False
                 else:
                     log.warning("Ainda na DescricaoV3 após Finalizar — pode não ter salvo")
+                    _finalizar_ok = False
             else:
                 log.debug("Atributos finalizados e salvos com sucesso")
 
@@ -219,6 +222,7 @@ async def fill_attributes(page: Page, attributes: list) -> None:
                 log.debug(f"Página atual após Voltar: {page.url}")
 
     log.info("Atributos técnicos preenchidos")
+    return _finalizar_ok
 
 
 async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> None:
@@ -325,29 +329,82 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
             )
             log.warning(f"Letra '{first_letter}' não encontrada na árvore. Nós disponíveis: {available}")
 
-        # Passo 2: Procurar o valor nos nós expandidos
+        # Passo 2: Procurar o valor nos nós expandidos (com fuzzy matching)
         # Usar evaluate pois pode haver milhares de nós (1900+)
         found = await popup_page.evaluate(
             """(value) => {
                 const nodes = document.querySelectorAll('a.nodeStyle, a.nodeStyleSel');
-                // Match exato
+                const upper = value.toUpperCase().trim();
+
+                // 1. Exact match
                 let target = Array.from(nodes).find(a => a.innerText.trim() === value);
-                // Match parcial se não achou exato
+                let matchType = 'exact';
+
+                // 2. Case-insensitive exact
                 if (!target) {
-                    const upper = value.toUpperCase();
                     target = Array.from(nodes).find(a => a.innerText.trim().toUpperCase() === upper);
+                    matchType = 'case-insensitive';
                 }
+
+                // 3. "starts with" match — tree value starts with Excel value or vice versa
+                if (!target) {
+                    target = Array.from(nodes).find(a => {
+                        const nodeText = a.innerText.trim().toUpperCase();
+                        return nodeText.startsWith(upper) || upper.startsWith(nodeText);
+                    });
+                    matchType = 'starts-with';
+                }
+
+                // 4. "contains all words" match — all words from Excel value appear in tree node
+                if (!target) {
+                    const words = upper.split(/\\s+/).filter(w => w.length > 2);
+                    if (words.length > 0) {
+                        target = Array.from(nodes).find(a => {
+                            const nodeText = a.innerText.trim().toUpperCase();
+                            return words.every(w => nodeText.includes(w));
+                        });
+                        matchType = 'contains-all-words';
+                    }
+                }
+
+                // 5. "most words match" — find node with most matching words (minimum 60%)
+                if (!target) {
+                    const words = upper.split(/\\s+/).filter(w => w.length > 2);
+                    if (words.length > 0) {
+                        let bestMatch = null;
+                        let bestScore = 0;
+                        for (const node of nodes) {
+                            const nodeText = node.innerText.trim().toUpperCase();
+                            const matchCount = words.filter(w => nodeText.includes(w)).length;
+                            const score = matchCount / words.length;
+                            if (score > bestScore && score >= 0.6) {
+                                bestScore = score;
+                                bestMatch = node;
+                            }
+                        }
+                        if (bestMatch) {
+                            target = bestMatch;
+                            matchType = 'best-word-match(' + Math.round(bestScore * 100) + '%)';
+                        }
+                    }
+                }
+
                 if (target) {
                     target.click();
-                    return target.innerText.trim();
+                    return { found: true, text: target.innerText.trim(), matchType: matchType };
                 }
-                return null;
+                return { found: false };
             }""",
             value,
         )
 
-        if found:
-            log.debug(f"Nó selecionado na árvore: '{found}'")
+        if found and found.get("found"):
+            matched_text = found.get("text", value)
+            match_type = found.get("matchType", "unknown")
+            if matched_text != value:
+                log.info(f"Atributo fuzzy match: '{value}' -> '{matched_text}' ({match_type})")
+            else:
+                log.debug(f"Nó selecionado na árvore: '{matched_text}' ({match_type})")
             await popup_page.wait_for_timeout(500)
 
             # Clicar em "Selecionar"

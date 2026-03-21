@@ -22,7 +22,7 @@ def _format_ncm(ncm: str) -> str:
     return ncm
 
 
-async def fill_ncm(page: Page, ncm: str) -> None:
+async def fill_ncm(page: Page, ncm: str) -> bool:
     """Navega para aba Fiscal e preenche o campo NCM/TIPI.
 
     Após preencher, dispara Tab para provocar a validação do ASP.NET.
@@ -43,15 +43,16 @@ async def fill_ncm(page: Page, ncm: str) -> None:
     if not is_editable:
         if current_value.strip() == ncm_formatted:
             log.info(f"NCM campo não editável, valor correto ({current_value}) — pulando")
+            return True
         else:
             log.warning(
                 f"NCM campo não editável com valor DIFERENTE do esperado: "
                 f"'{current_value}' (esperado '{ncm_formatted}') — não é possível corrigir"
             )
-        return
+            return False
     if current_value and current_value.strip() == ncm_formatted:
         log.info(f"NCM já preenchido corretamente ({current_value}) — pulando")
-        return
+        return True
     if current_value and current_value.strip():
         log.warning(
             f"NCM existente '{current_value}' difere do esperado '{ncm_formatted}' — substituindo"
@@ -82,9 +83,11 @@ async def fill_ncm(page: Page, ncm: str) -> None:
         await page.keyboard.press("Tab")
         await page.wait_for_timeout(2000)
         _browser.last_dialog_message = ""
+        return False
     else:
         # Salvar para persistir o NCM (sem Salvar, valor é perdido ao trocar de aba)
         await safe_click(page, SELECTORS["salvar_btn"])
         await page.wait_for_load_state("networkidle")
         await page.wait_for_timeout(1000)
         log.info(f"NCM {ncm} preenchido e salvo")
+        return True

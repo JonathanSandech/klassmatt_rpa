@@ -1,4 +1,13 @@
-"""Aba Classificações — UNSPSC."""
+"""Aba Classificações — UNSPSC.
+
+Performance notes (2026-03):
+    - UNSPSC was the #1 bottleneck (~45-60s per item, 45-50% of total time).
+    - ASP.NET postbacks require networkidle waits (unavoidable).
+    - Explicit wait_for_timeout calls were reduced from 3.5s total to 0.5s.
+    - Each sub-step is timed so regressions can be identified in the logs.
+"""
+
+import time
 
 from playwright.async_api import Page
 
@@ -7,7 +16,7 @@ from browser import safe_click, safe_fill, hide_overlays
 from logger import log
 
 
-async def fill_unspsc(page: Page, unspsc_code: str) -> None:
+async def fill_unspsc(page: Page, unspsc_code: str) -> bool:
     """Preenche o código UNSPSC na aba Classificações.
 
     Sequência: Aba Classificações → botão UNSPSC → preencher código →
@@ -15,14 +24,18 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> None:
 
     Se o código não existir no Klassmatt, loga erro e não seleciona nada.
     """
+    t0 = time.perf_counter()
     log.info(f"Preenchendo UNSPSC: {unspsc_code}")
 
-    # Navegar para aba Classificações
+    # --- 1. Navegar para aba Classificações (postback) ---
+    t1 = time.perf_counter()
     await safe_click(page, SELECTORS["tab_classificacoes"])
-    await page.wait_for_load_state("networkidle")
+    await page.wait_for_load_state("networkidle")  # postback — must wait
     await hide_overlays(page)
+    log.debug(f"  UNSPSC [tab_classificacoes] {time.perf_counter() - t1:.1f}s")
 
-    # Verificar se UNSPSC já está preenchido com o valor correto (idempotente)
+    # --- 2. Idempotency check — fast JS evaluate, always run ---
+    t1 = time.perf_counter()
     current_unspsc = await page.evaluate(
         """() => {
             const el = document.querySelector('#txtUNSPSC') ||
@@ -37,24 +50,31 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> None:
             return '';
         }"""
     )
+    log.debug(f"  UNSPSC [idempotency_check] {time.perf_counter() - t1:.1f}s")
     if current_unspsc and current_unspsc.replace('.', '') == str(unspsc_code).strip():
         log.info(f"UNSPSC já preenchido corretamente ({current_unspsc}) — pulando")
-        return
+        return True
 
-    # Clicar no botão UNSPSC
+    # --- 3. Abrir popup UNSPSC (postback) ---
+    t1 = time.perf_counter()
     await safe_click(page, SELECTORS["unspsc_btn"])
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(1000)
+    await page.wait_for_load_state("networkidle")  # postback — must wait
+    # Small buffer for ASP.NET panel to render after postback completes
+    await page.wait_for_timeout(200)
+    log.debug(f"  UNSPSC [open_popup] {time.perf_counter() - t1:.1f}s")
 
-    # Preencher código
+    # --- 4. Preencher código ---
     await safe_fill(page, SELECTORS["unspsc_input"], str(unspsc_code))
 
-    # Pesquisar
+    # --- 5. Pesquisar (postback) ---
+    t1 = time.perf_counter()
     await safe_click(page, SELECTORS["unspsc_pesquisar_btn"])
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(1000)
+    await page.wait_for_load_state("networkidle")  # postback — must wait
+    # No extra wait needed: networkidle already guarantees DOM is stable
+    log.debug(f"  UNSPSC [pesquisar] {time.perf_counter() - t1:.1f}s")
 
-    # Verificar se a pesquisa retornou resultados REAIS (não "Nenhum registro")
+    # --- 6. Verificar resultado ---
+    t1 = time.perf_counter()
     search_result = await page.evaluate(
         """(expectedCode) => {
             const noResult = document.body.innerText.includes('Nenhum registro');
@@ -82,6 +102,7 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> None:
         }""",
         str(unspsc_code),
     )
+    log.debug(f"  UNSPSC [verify_result] {time.perf_counter() - t1:.1f}s")
 
     if not search_result.get("found"):
         reason = search_result.get("reason", "desconhecido")
@@ -98,21 +119,29 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> None:
                 await page.wait_for_load_state("networkidle")
         except Exception:
             pass
-        return
+        return False
 
-    # Marcar checkbox via Playwright click (input[type="image"] precisa de click real
-    # com coordenadas x,y para disparar o postback ASP.NET — JS cb.click() não funciona)
+    # --- 7. Marcar checkbox (postback — input[type="image"] needs real click) ---
+    t1 = time.perf_counter()
     await page.click("input[id$='ckSelUNSPSC']")
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(500)
+    await page.wait_for_load_state("networkidle")  # postback — must wait
+    # No extra wait: networkidle is sufficient for the postback to complete
+    log.debug(f"  UNSPSC [checkbox] {time.perf_counter() - t1:.1f}s")
 
-    # Confirmar seleção
+    # --- 8. Confirmar seleção (postback) ---
+    t1 = time.perf_counter()
     await safe_click(page, SELECTORS["unspsc_selecionar_btn"])
-    await page.wait_for_load_state("networkidle")
+    await page.wait_for_load_state("networkidle")  # postback — must wait
+    log.debug(f"  UNSPSC [selecionar] {time.perf_counter() - t1:.1f}s")
 
-    # Salvar para persistir o UNSPSC (sem Salvar, valor é perdido ao trocar de aba)
+    # --- 9. Salvar (postback — sem Salvar, valor é perdido ao trocar de aba) ---
+    t1 = time.perf_counter()
     await safe_click(page, SELECTORS["salvar_btn"])
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(1000)
+    await page.wait_for_load_state("networkidle")  # postback — must wait
+    # Small buffer to ensure save confirmation is rendered
+    await page.wait_for_timeout(300)
+    log.debug(f"  UNSPSC [salvar] {time.perf_counter() - t1:.1f}s")
 
-    log.info(f"UNSPSC {unspsc_code} selecionado e salvo")
+    elapsed = time.perf_counter() - t0
+    log.info(f"UNSPSC {unspsc_code} selecionado e salvo ({elapsed:.1f}s)")
+    return True

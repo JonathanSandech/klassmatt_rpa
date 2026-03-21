@@ -27,17 +27,23 @@ def save_progress(progress: dict[str, Any]) -> None:
     )
 
 
-def mark_item(progress: dict, sin: str, status: str, error: str = "") -> None:
-    """Marca um item com status (ok, error, skipped, duplicate)."""
+def mark_item(progress: dict, sin: str, status: str, error: str = "", warnings: list | None = None) -> None:
+    """Marca um item com status (ok, error, skipped, duplicate, needs_review)."""
     if "items" not in progress:
         progress["items"] = {}
     progress["items"][sin] = {
         "status": status,
         "timestamp": datetime.now().isoformat(),
         "error": error,
+        "warnings": warnings or [],
     }
     save_progress(progress)
-    log.info(f"SIN {sin} → {status}" + (f" ({error})" if error else ""))
+    extra = ""
+    if error:
+        extra = f" ({error})"
+    elif warnings:
+        extra = f" (warnings: {warnings})"
+    log.info(f"SIN {sin} -> {status}{extra}")
 
 
 def is_processed(progress: dict, sin: str) -> bool:
