@@ -2,9 +2,11 @@
 
 Performance notes (2026-03):
     - UNSPSC was the #1 bottleneck (~45-60s per item, 45-50% of total time).
-    - ASP.NET postbacks require networkidle waits (unavoidable).
-    - Explicit wait_for_timeout calls were reduced from 3.5s total to 0.5s.
-    - Each sub-step is timed so regressions can be identified in the logs.
+    - Root cause: safe_click tries Playwright click first, fails on div1 overlay
+      after 30s timeout, then falls back to JS. This happened on tab + ibutUNSPSC.
+    - Fix: safe_click with timeout=5000 on those 2 steps only (~5s fallback vs 30s).
+    - Other buttons (Pesquisar, Selecionar, Salvar) are inside the UNSPSC panel
+      and NOT blocked by div1 overlay — use normal safe_click for proper nav tracking.
 """
 
 import time
@@ -20,17 +22,19 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> bool:
     """Preenche o código UNSPSC na aba Classificações.
 
     Sequência: Aba Classificações → botão UNSPSC → preencher código →
-    Pesquisar → verificar resultado → selecionar → Selecionar
+    Pesquisar → verificar resultado → selecionar → Selecionar → Salvar
 
     Se o código não existir no Klassmatt, loga erro e não seleciona nada.
     """
     t0 = time.perf_counter()
     log.info(f"Preenchendo UNSPSC: {unspsc_code}")
 
-    # --- 1. Navegar para aba Classificações (postback) ---
+    # --- 1. Navegar para aba Classificações ---
+    # safe_click com timeout curto: overlay div1 intercepta o click normal,
+    # fallback JS dispara em ~5s em vez de 30s (ACTION_TIMEOUT padrão).
     t1 = time.perf_counter()
-    await safe_click(page, SELECTORS["tab_classificacoes"])
-    await page.wait_for_load_state("networkidle")  # postback — must wait
+    await safe_click(page, SELECTORS["tab_classificacoes"], timeout=5000)
+    await page.wait_for_load_state("networkidle")
     await hide_overlays(page)
     log.debug(f"  UNSPSC [tab_classificacoes] {time.perf_counter() - t1:.1f}s")
 
@@ -41,7 +45,6 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> bool:
             const el = document.querySelector('#txtUNSPSC') ||
                        document.querySelector('input[id*="UNSPSC"]');
             if (el && el.value) return el.value.trim();
-            // Tentar pegar do texto visível na aba
             const spans = document.querySelectorAll('span, td');
             for (const s of spans) {
                 const m = s.innerText.match(/^(\\d{8})\\./);
@@ -55,22 +58,21 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> bool:
         log.info(f"UNSPSC já preenchido corretamente ({current_unspsc}) — pulando")
         return True
 
-    # --- 3. Abrir popup UNSPSC (postback) ---
+    # --- 3. Abrir popup UNSPSC ---
+    # Mesmo padrão: timeout curto para falhar rápido no overlay,
+    # JS fallback dispara o postback corretamente.
     t1 = time.perf_counter()
-    await safe_click(page, SELECTORS["unspsc_btn"])
-    await page.wait_for_load_state("networkidle")  # postback — must wait
-    # Small buffer for ASP.NET panel to render after postback completes
-    await page.wait_for_timeout(200)
+    await safe_click(page, SELECTORS["unspsc_btn"], timeout=5000)
+    await page.wait_for_load_state("networkidle")
     log.debug(f"  UNSPSC [open_popup] {time.perf_counter() - t1:.1f}s")
 
     # --- 4. Preencher código ---
     await safe_fill(page, SELECTORS["unspsc_input"], str(unspsc_code))
 
-    # --- 5. Pesquisar (postback) ---
+    # --- 5. Pesquisar (postback — safe_click para tracking de navegação) ---
     t1 = time.perf_counter()
     await safe_click(page, SELECTORS["unspsc_pesquisar_btn"])
-    await page.wait_for_load_state("networkidle")  # postback — must wait
-    # No extra wait needed: networkidle already guarantees DOM is stable
+    await page.wait_for_load_state("networkidle")
     log.debug(f"  UNSPSC [pesquisar] {time.perf_counter() - t1:.1f}s")
 
     # --- 6. Verificar resultado ---
@@ -83,7 +85,6 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> bool:
             const checkboxes = document.querySelectorAll("input[id$='ckSelUNSPSC']");
             if (checkboxes.length === 0) return { found: false, reason: 'sem_checkbox' };
 
-            // Procurar o código exato na grid de resultados
             const rows = document.querySelectorAll('tr');
             for (const row of rows) {
                 const cells = row.querySelectorAll('td');
@@ -94,7 +95,6 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> bool:
                 }
             }
 
-            // Se não encontrou exato, verificar primeiro resultado
             const firstRow = checkboxes[0].closest('tr');
             const firstCode = firstRow ? firstRow.querySelector('td') : null;
             const firstCodeText = firstCode ? firstCode.innerText.trim() : '';
@@ -121,24 +121,22 @@ async def fill_unspsc(page: Page, unspsc_code: str) -> bool:
             pass
         return False
 
-    # --- 7. Marcar checkbox (postback — input[type="image"] needs real click) ---
+    # --- 7. Marcar checkbox (input[type=image] — needs real click with coords) ---
     t1 = time.perf_counter()
     await page.click("input[id$='ckSelUNSPSC']")
-    await page.wait_for_load_state("networkidle")  # postback — must wait
-    # No extra wait: networkidle is sufficient for the postback to complete
+    await page.wait_for_load_state("networkidle")
     log.debug(f"  UNSPSC [checkbox] {time.perf_counter() - t1:.1f}s")
 
-    # --- 8. Confirmar seleção (postback) ---
+    # --- 8. Confirmar seleção (postback — safe_click para tracking de navegação) ---
     t1 = time.perf_counter()
     await safe_click(page, SELECTORS["unspsc_selecionar_btn"])
-    await page.wait_for_load_state("networkidle")  # postback — must wait
+    await page.wait_for_load_state("networkidle")
     log.debug(f"  UNSPSC [selecionar] {time.perf_counter() - t1:.1f}s")
 
-    # --- 9. Salvar (postback — sem Salvar, valor é perdido ao trocar de aba) ---
+    # --- 9. Salvar (postback — safe_click para tracking de navegação) ---
     t1 = time.perf_counter()
     await safe_click(page, SELECTORS["salvar_btn"])
-    await page.wait_for_load_state("networkidle")  # postback — must wait
-    # Small buffer to ensure save confirmation is rendered
+    await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(300)
     log.debug(f"  UNSPSC [salvar] {time.perf_counter() - t1:.1f}s")
 
