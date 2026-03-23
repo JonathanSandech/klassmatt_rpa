@@ -601,40 +601,85 @@ async def verify_and_fix_sin(
             # Salvar geral para limpar dirty state antes de navegar para PDM/Descrições
             if (needs_reference or needs_relationship) and (needs_pdm or needs_attributes):
                 log.debug("  Salvando item para limpar dirty state...")
-                try:
-                    # Override confirm/alert ANTES de salvar (postback pode triggar alerts)
-                    await item_page.evaluate("""() => {
-                        window.confirm = () => true;
-                        window.alert = () => {};
-                    }""")
-                    salvar_footer = item_page.locator("#butSalvar")
-                    if await salvar_footer.count() > 0:
-                        await salvar_footer.click()
-                        await item_page.wait_for_load_state("networkidle")
-                        await item_page.wait_for_timeout(2000)
-                        # Re-override após postback (o JS é recarregado)
+                for save_attempt in range(3):
+                    try:
+                        # Override confirm/alert ANTES de salvar (postback pode triggar alerts)
                         await item_page.evaluate("""() => {
                             window.confirm = () => true;
                             window.alert = () => {};
                         }""")
-                        await hide_overlays(item_page)
-                        log.debug("  Item salvo")
-                except Exception as save_err:
-                    log.warning(f"  Salvar geral falhou: {save_err}")
+                        salvar_footer = item_page.locator("#butSalvar")
+                        if await salvar_footer.count() > 0:
+                            await salvar_footer.click()
+                            await item_page.wait_for_load_state("networkidle")
+                            await item_page.wait_for_timeout(2000)
+                            # Re-override após postback (o JS é recarregado)
+                            await item_page.evaluate("""() => {
+                                window.confirm = () => true;
+                                window.alert = () => {};
+                            }""")
+                            await hide_overlays(item_page)
+                    except Exception as save_err:
+                        log.warning(f"  Salvar geral falhou: {save_err}")
+
+                    # Verificar se dirty state foi limpo tentando navegar para Classificações
+                    dirty = await item_page.evaluate("""() => {
+                        // Tentar clicar numa aba neutra para testar se há dirty state
+                        // Se window.__doPostBack está bloqueado por alert, retorna true
+                        try {
+                            const tabs = document.querySelectorAll('a');
+                            const tab = Array.from(tabs).find(a => a.innerText.includes('Classificações'));
+                            if (tab) { tab.click(); return false; }
+                        } catch(e) { return true; }
+                        return false;
+                    }""")
+                    await item_page.wait_for_timeout(1500)
+
+                    # Checar se alert de dirty state apareceu (o dialog handler aceita, mas a página não navega)
+                    still_dirty = await item_page.evaluate("""() => {
+                        // Se ainda estamos na mesma aba (referências visível), dirty state persiste
+                        const refTab = document.querySelector('#tabReferencias');
+                        if (refTab && refTab.offsetHeight > 0) return true;
+                        return false;
+                    }""")
+
+                    if not still_dirty:
+                        log.debug(f"  Item salvo (dirty state limpo, tentativa {save_attempt + 1})")
+                        break
+                    else:
+                        log.warning(f"  Dirty state persiste após save (tentativa {save_attempt + 1})")
+                        # Forçar: navegar para aba de referências e salvar lá
+                        await item_page.evaluate("""() => {
+                            window.confirm = () => true;
+                            window.alert = () => {};
+                            // Clicar na aba referências para voltar ao contexto
+                            const tabs = document.querySelectorAll('a');
+                            const tab = Array.from(tabs).find(a => a.innerText.includes('Referências'));
+                            if (tab) tab.click();
+                        }""")
+                        await item_page.wait_for_timeout(2000)
 
             # Validação SAP antes de PDM
             if needs_pdm or needs_attributes:
                 await validate_sap_description(item_page)
 
             if needs_pdm and item.get("pdm"):
-                await change_pdm(item_page, str(item["pdm"]))
-                result["fixed"].append("PDM")
-                log.info(f"  ✓ PDM corrigido: {item['pdm']}")
+                pdm_ok = await change_pdm(item_page, str(item["pdm"]))
+                if pdm_ok:
+                    result["fixed"].append("PDM")
+                    log.info(f"  ✓ PDM corrigido: {item['pdm']}")
+                else:
+                    result["warnings"].append("PDM falhou (dirty state ou navegação bloqueada)")
+                    log.warning(f"  ✗ PDM NÃO corrigido: {item['pdm']}")
 
             if needs_attributes:
-                await fill_attributes(item_page, item.get("attributes", []))
-                result["fixed"].append("Atributos")
-                log.info("  ✓ Atributos corrigidos")
+                attr_ok = await fill_attributes(item_page, item.get("attributes", []))
+                if attr_ok:
+                    result["fixed"].append("Atributos")
+                    log.info("  ✓ Atributos corrigidos")
+                else:
+                    result["warnings"].append("Atributos falhou")
+                    log.warning("  ✗ Atributos NÃO corrigidos")
 
             # Remeter
             if REMETER_APOS_FIX:
@@ -650,7 +695,13 @@ async def verify_and_fix_sin(
                     except Exception:
                         pass
 
-            result["status"] = "corrigido"
+            # Status: corrigido só se todos os diffs foram fixados
+            unfixed = [d["field"] for d in result["diffs"] if d["field"] not in result["fixed"]
+                       and not any(d["field"] in f for f in result["fixed"])]
+            if result["warnings"]:
+                result["status"] = "parcial"
+            else:
+                result["status"] = "corrigido"
 
         except Exception as fix_err:
             log.error(f"  Erro ao corrigir: {fix_err}")

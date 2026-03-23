@@ -149,15 +149,31 @@ async def validate_sap_description(page: Page) -> None:
     log.info("Validação SAP concluída")
 
 
-async def change_pdm(page: Page, pdm: str) -> None:
+async def change_pdm(page: Page, pdm: str) -> bool:
     """Altera o padrão PDM na aba Descrições.
 
     Sequência: Descrições → Editar Descrição → Alterar Padrão →
     digitar PDM → Enter → clicar 'PARTES E PECAS' → Definir Padrão
+
+    Retorna True se PDM foi alterado ou já estava correto, False se falhou.
     """
     log.info(f"Alterando PDM para: {pdm}")
 
     await _click_tab(page, "Descrições")
+
+    # Verificar se realmente navegou para a aba Descrições
+    # (dirty state de outra aba pode bloquear a navegação)
+    on_desc_tab = await page.evaluate("""() => {
+        // Verificar se conteúdo de Descrições está visível
+        const descContent = document.querySelector('#txtD2, [id*="tabDescricoes"]');
+        const editLink = Array.from(document.querySelectorAll('a')).find(
+            a => a.innerText.includes('Editar Descri')
+        );
+        return !!(descContent || editLink);
+    }""")
+    if not on_desc_tab and "ITEM_Edita_DescricaoV3" not in page.url:
+        log.warning("Não conseguiu navegar para aba Descrições (dirty state?) — PDM não alterado")
+        return False
 
     # Verificar se PDM já está definido (idempotente)
     pdm_already_set = await page.evaluate(
@@ -187,7 +203,7 @@ async def change_pdm(page: Page, pdm: str) -> None:
             await hide_overlays(page)
         else:
             log.warning("Link 'Editar Descrição' não encontrado — PDM pode já estar definido")
-            return
+            return False
 
     # Verificar se PDM já está definido de verdade.
     # dgDadosTecnicos SEMPRE existe (com TEXTO LONGO/TEXTO CURTO genéricos).
@@ -213,7 +229,7 @@ async def change_pdm(page: Page, pdm: str) -> None:
     )
     if pdm_is_set:
         log.info("PDM já definido (atributos reais presentes) — pulando")
-        return
+        return True
 
     # Aguardar botão "Alterar Padrão"
     alterar_btn = page.locator(SELECTORS["alterar_padrao_btn"])
@@ -221,7 +237,7 @@ async def change_pdm(page: Page, pdm: str) -> None:
         await alterar_btn.wait_for(state="visible", timeout=10_000)
     except Exception:
         log.warning("Botão 'Alterar Padrão' não encontrado — PDM pode já estar definido")
-        return
+        return False
 
     try:
         await page.evaluate(
@@ -259,7 +275,7 @@ async def change_pdm(page: Page, pdm: str) -> None:
     )
     if not found_cat:
         log.warning(f"Categoria '{PDM_CATEGORY}' não encontrada para PDM {pdm}")
-        return
+        return False
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
 
@@ -293,3 +309,4 @@ async def change_pdm(page: Page, pdm: str) -> None:
     # o que persiste PDM + atributos juntos.
 
     log.info(f"PDM alterado para: {pdm} / {PDM_CATEGORY}")
+    return True
