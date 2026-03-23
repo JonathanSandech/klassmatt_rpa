@@ -167,9 +167,11 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     await safe_fill(page, SELECTORS["ref_partnumber_input"], str(part_number))
 
     # Salvar — o confirm dialog "Fabricante não existe, deseja cadastrá-lo?" é aceito
-    # automaticamente pelo handler global.
-    salvar_btn = page.locator(SELECTORS["ref_salvar_btn"]).first
-    await salvar_btn.click()
+    # automaticamente pelo handler global. Usar JS para evitar form intercept.
+    await page.evaluate("""() => {
+        const btn = document.querySelector('#btnSalvar');
+        if (btn) btn.click();
+    }""")
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
 
@@ -178,12 +180,13 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     if is_duplicate:
         log.warning(f"Referência duplicada detectada: {empresa} / {part_number}")
         # Clicar Continuar se disponível
-        continuar = page.locator("input[value='Continuar']")
         try:
-            if await continuar.count() > 0:
-                await continuar.click()
-                await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(1000)
+            await page.evaluate("""() => {
+                const btn = document.querySelector("input[value='Continuar']");
+                if (btn) btn.click();
+            }""")
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
         except Exception:
             pass
         return False
@@ -195,7 +198,7 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
             salvar_still = page.locator(SELECTORS["ref_salvar_btn"]).first
             if await salvar_still.is_visible(timeout=1_500):
                 log.debug(f"Form referência ainda aberto (retry {retry + 1}) — salvando novamente")
-                await salvar_still.click()
+                await page.evaluate("() => { const b = document.querySelector('#btnSalvar'); if (b) b.click(); }")
                 await page.wait_for_load_state("networkidle")
                 await page.wait_for_timeout(1000)
             else:
