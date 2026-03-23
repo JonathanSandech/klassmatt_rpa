@@ -347,14 +347,20 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
                 }
 
                 // 3. "starts with" match — tree value starts with Excel value or vice versa
+                //    Ignore single-char nodes (alphabet letters A-Z, 0-9) to avoid
+                //    "LM2500..." matching letter "L"
                 if (!target) {
-                    // Prefer shortest match to avoid "PORCA" matching "PARAFUSO PORCA"
                     let candidates = Array.from(nodes).filter(a => {
                         const nodeText = a.innerText.trim().toUpperCase();
+                        if (nodeText.length <= 2) return false;  // skip alphabet letters
                         return nodeText.startsWith(upper) || upper.startsWith(nodeText);
                     });
                     if (candidates.length > 0) {
-                        candidates.sort((a, b) => a.innerText.trim().length - b.innerText.trim().length);
+                        // Prefer closest length to search value
+                        candidates.sort((a, b) =>
+                            Math.abs(a.innerText.trim().length - upper.length)
+                            - Math.abs(b.innerText.trim().length - upper.length)
+                        );
                         target = candidates[0];
                         matchType = 'starts-with';
                     }
