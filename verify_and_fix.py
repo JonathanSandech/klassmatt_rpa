@@ -659,8 +659,9 @@ async def verify_and_fix_sin(
                         }""")
                         await item_page.wait_for_timeout(2000)
 
-            # Validação SAP antes de PDM
-            if needs_pdm or needs_attributes:
+            # Validação SAP — só se NÃO vai mudar PDM (PDM reseta a descrição)
+            # E só se NÃO mexeu em referências (validate_sap abre ref edit → dirty state)
+            if needs_attributes and not needs_pdm and not needs_reference:
                 await validate_sap_description(item_page)
 
             if needs_pdm and item.get("pdm"):
