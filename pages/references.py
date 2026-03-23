@@ -133,21 +133,23 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
             use_edit = False
 
     # Abrir formulário: EDIT (Imagebutton22) ou ADD (iButAddRef)
+    # Usar JS evaluate para evitar form intercept de pointer events
     if use_edit:
-        edit_btn = page.locator("input[type='image'][id$='Imagebutton22']").first
-        if await edit_btn.count() > 0:
-            log.debug("Editando via Imagebutton22")
-            await edit_btn.click()
-        else:
-            log.warning("Imagebutton22 não encontrado — usando ADD")
-            await page.locator("#iButAddRef").click()
+        clicked = await page.evaluate("""() => {
+            const btn = document.querySelector("input[type='image'][id$='Imagebutton22']");
+            if (btn) { btn.click(); return true; }
+            const add = document.querySelector('#iButAddRef');
+            if (add) { add.click(); return true; }
+            return false;
+        }""")
+        log.debug(f"Editando via {'Imagebutton22' if clicked else 'fallback'}")
     else:
-        add_btn = page.locator("#iButAddRef")
-        if await add_btn.count() > 0 and await add_btn.is_visible():
-            await add_btn.click()
-        else:
-            edit_btn = page.locator("input[type='image'][id$='Imagebutton22']")
-            await edit_btn.click()
+        await page.evaluate("""() => {
+            const add = document.querySelector('#iButAddRef');
+            if (add) { add.click(); return; }
+            const edit = document.querySelector("input[type='image'][id$='Imagebutton22']");
+            if (edit) edit.click();
+        }""")
 
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(1000)
