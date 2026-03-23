@@ -1,0 +1,876 @@
+"""Verifica e corrige SINs em uma única passagem.
+
+Abre cada SIN, lê os dados (verify), e se divergente, corrige
+apenas os campos errados (fix) — tudo na mesma sessão, sem
+precisar navegar duas vezes.
+
+Uso:
+    python verify_and_fix.py                         # todos os SINs da planilha
+    python verify_and_fix.py 474284 474291           # SINs específicos
+    python verify_and_fix.py --file=lista.txt        # SINs de um arquivo
+    python verify_and_fix.py --only-divergent        # re-processa divergentes do report
+    python verify_and_fix.py --verify-only            # só verifica, não corrige
+"""
+
+import asyncio
+import json
+import re
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+from playwright.async_api import async_playwright, Dialog
+
+from config import (
+    EXCEL_PATH, PROFILE_DIR, SLOW_MO, HEADLESS,
+    VIEWPORT_WIDTH, VIEWPORT_HEIGHT, PROGRESS_FILE,
+    RELATIONSHIP_TYPE,
+)
+from excel_handler import load_excel, validate_documents
+from browser import hide_overlays
+from logger import log
+
+# Page objects (fix)
+from pages.classifications import fill_unspsc
+from pages.fiscal import fill_ncm
+from pages.references import fill_reference
+from pages.relationships import fill_relationship
+from pages.media import upload_documents
+from pages.descriptions import validate_sap_description, change_pdm
+from pages.attributes import fill_attributes
+
+
+REPORT_FILE = Path(__file__).parent / "verify_report.json"
+REMETER_APOS_FIX = False
+
+
+# ─── Report helpers ───────────────────────────────────────────
+
+
+def _load_report() -> dict:
+    if REPORT_FILE.exists():
+        try:
+            return json.loads(REPORT_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"timestamp": "", "total": 0, "counts": {}, "results": []}
+
+
+def _save_report(report: dict):
+    report["timestamp"] = datetime.now().isoformat()
+    REPORT_FILE.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+# ─── Dialog ───────────────────────────────────────────────────
+
+
+async def handle_dialog(dialog: Dialog):
+    log.debug(f"Dialog ({dialog.type}): {dialog.message}")
+    await dialog.accept()
+
+
+# ─── Navigation helpers ───────────────────────────────────────
+
+
+async def _navigate_to_worklist(page):
+    """Garante que estamos na worklist com pesquisar() disponível."""
+    for attempt in range(3):
+        ready = await page.evaluate("() => typeof pesquisar === 'function'")
+        if ready:
+            return
+        await page.evaluate("""() => {
+            const links = document.querySelectorAll('a');
+            const wl = Array.from(links).find(a => a.innerText.includes('Acompanhamento das Solicita'));
+            const principal = Array.from(links).find(a => a.innerText === 'Principal');
+            if (wl) wl.click();
+            else if (principal) principal.click();
+        }""")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(3000)
+
+
+async def _search_and_open_sin(page, sin: str):
+    """Busca SIN na worklist e abre. Retorna a page do item (pode ser nova aba)."""
+    await page.evaluate(f"""() => {{
+        const ta = document.querySelector("textarea[name$='txtValor']");
+        if (ta) ta.value = '{sin}';
+        pesquisar(0, '');
+    }}""")
+    await page.wait_for_timeout(5000)
+
+    pages_before = len(page.context.pages)
+    found = await page.evaluate(f"""() => {{
+        const link = document.querySelector("a[href*='abreSIN({sin})']");
+        if (link) {{ link.click(); return true; }}
+        const results = document.querySelectorAll('#DIVResultado .result a');
+        if (results.length > 0) {{ results[0].click(); return true; }}
+        return false;
+    }}""")
+    if not found:
+        raise RuntimeError(f"SIN {sin} não encontrado na worklist")
+
+    await page.wait_for_timeout(3000)
+
+    # Retornar nova aba se abriu
+    if len(page.context.pages) > pages_before:
+        new_page = page.context.pages[-1]
+        new_page.on("dialog", handle_dialog)
+        await new_page.wait_for_load_state("networkidle")
+        await new_page.wait_for_timeout(1000)
+        return new_page
+
+    await page.wait_for_load_state("networkidle")
+    return page
+
+
+async def _get_status(page) -> str:
+    return await page.evaluate(
+        "() => { const s = document.querySelector(\"input[id$='txtStatus']\"); return s ? s.value : ''; }"
+    )
+
+
+async def _voltar_worklist(page):
+    """Volta para a worklist navegando via Principal."""
+    await page.evaluate("""() => {
+        const links = document.querySelectorAll('a');
+        const p = Array.from(links).find(a => a.innerText.trim() === 'Principal');
+        if (p) p.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(2000)
+
+    await page.evaluate("""() => {
+        const links = document.querySelectorAll('a');
+        const wl = Array.from(links).find(a => a.innerText.includes('Acompanhamento das Solicita'));
+        if (wl) wl.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(2000)
+
+    try:
+        await page.select_option(
+            "select:has(option[value='SOMENTE_REC_ACAO'])",
+            label="Todas as Solicitações",
+        )
+        await page.evaluate("() => { pesquisar(0, ''); }")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(3000)
+    except Exception:
+        pass
+
+
+async def _retornar_etapa(page) -> bool:
+    """Retorna o item de APROVACAO-TECNICA para FINALIZACAO."""
+    log.info("  Retornando etapa (APROVACAO-TECNICA → FINALIZACAO)...")
+    await page.evaluate("""() => {
+        const btn = document.querySelector('#lkbutTrazerDeVolta');
+        if (btn) btn.click();
+    }""")
+    await page.wait_for_timeout(3000)
+
+    sim_btn = page.locator("input[value='Sim']")
+    try:
+        await sim_btn.click(timeout=5000)
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(3000)
+    except Exception:
+        log.warning("  Botão 'Sim' não encontrado para Retornar Etapa")
+        return False
+
+    status = await _get_status(page)
+    log.info(f"  Status após retorno: {status}")
+    return status == "FINALIZACAO"
+
+
+# ─── Verify: leitura de campos ────────────────────────────────
+
+
+def _format_ncm(ncm_raw: str) -> str:
+    digits = re.sub(r"\D", "", str(ncm_raw))
+    if len(digits) == 8:
+        return f"{digits[:4]}.{digits[4:6]}.{digits[6:8]}"
+    return str(ncm_raw)
+
+
+async def _read_unspsc(page) -> str:
+    await page.evaluate("""() => {
+        const tabs = document.querySelectorAll('a');
+        const tab = Array.from(tabs).find(a => a.innerText.includes('Classificações'));
+        if (tab) tab.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(1000)
+
+    return await page.evaluate("""() => {
+        const inp = document.querySelector('#txtUNSPSC');
+        if (inp && inp.value) {
+            const m = inp.value.match(/^(\\d{8})/);
+            if (m) return m[1];
+        }
+        return '';
+    }""")
+
+
+async def _read_ncm(page) -> str:
+    await page.evaluate("""() => {
+        const tabs = document.querySelectorAll('a');
+        const tab = Array.from(tabs).find(a => a.innerText.includes('Fiscal'));
+        if (tab) tab.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(1000)
+
+    return await page.evaluate("""() => {
+        const ncm = document.querySelector('#txtNCMTIPI');
+        return ncm ? ncm.value.trim() : '';
+    }""")
+
+
+async def _read_references(page) -> list[dict]:
+    await page.evaluate("""() => {
+        const tabs = document.querySelectorAll('a');
+        const tab = Array.from(tabs).find(a => a.innerText.includes('Referências'));
+        if (tab) tab.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(1000)
+
+    return await page.evaluate("""() => {
+        const result = [];
+        const allText = document.body.innerText || '';
+        const matches = allText.match(/Referência\\/Fabricante:\\s*([^\\n]+)/g);
+        if (matches) {
+            for (const m of matches) {
+                const val = m.replace('Referência/Fabricante:', '').trim();
+                if (val === 'N/A' || val === 'N/A/N/A' || val === '/' || val === '') continue;
+                const lastSlash = val.lastIndexOf('/');
+                let partNumber, empresa;
+                if (lastSlash > 0) {
+                    partNumber = val.substring(0, lastSlash).trim();
+                    empresa = val.substring(lastSlash + 1).trim();
+                } else {
+                    partNumber = val;
+                    empresa = '';
+                }
+                result.push({partNumber, empresa, raw: val});
+            }
+        }
+        return result;
+    }""")
+
+
+async def _read_relationships(page) -> list[dict]:
+    await page.evaluate("""() => {
+        const tabs = document.querySelectorAll('a');
+        const tab = Array.from(tabs).find(a => a.innerText.includes('Relacionamentos'));
+        if (tab) tab.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(1000)
+
+    return await page.evaluate("""() => {
+        const table = document.querySelector('#dgRelacionamento');
+        if (!table) return [];
+        const result = [];
+        for (let i = 1; i < table.rows.length; i++) {
+            const cells = table.rows[i].querySelectorAll('td');
+            if (cells.length < 4) continue;
+            const tipo = (cells[0]?.innerText || '').trim();
+            const codigo = (cells[1]?.innerText || '').trim();
+            const status = (cells[2]?.innerText || '').trim();
+            const comentario = (cells[3]?.innerText || '').trim();
+            if (!tipo && !codigo) continue;
+            result.push({tipo, codigo, status, comentario});
+        }
+        return result;
+    }""")
+
+
+async def _read_media_count(page) -> int:
+    return await page.evaluate("""() => {
+        const tabs = document.querySelectorAll('a');
+        for (const tab of tabs) {
+            const m = tab.innerText.match(/Mídias\\s*\\((\\d+)\\)/);
+            if (m) return parseInt(m[1]);
+        }
+        return -1;
+    }""")
+
+
+async def _read_pdm_and_attributes(page) -> dict:
+    await page.evaluate("""() => {
+        const tabs = document.querySelectorAll('a');
+        const tab = Array.from(tabs).find(a => a.innerText.includes('Descrições'));
+        if (tab) tab.click();
+    }""")
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(1000)
+
+    found = await page.evaluate("""() => {
+        const links = document.querySelectorAll('a');
+        const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
+        if (link) { link.click(); return true; }
+        return false;
+    }""")
+    if found:
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(1000)
+
+    result = await page.evaluate("""() => {
+        const data = {padronizado: true, attributes: []};
+        if (document.body.innerText.includes('NÃO-PADRONIZADO')) {
+            data.padronizado = false;
+        }
+        const dg = document.querySelector('#dgDadosTecnicos');
+        if (!dg) return data;
+        const rows = dg.querySelectorAll('tr');
+        for (let i = 1; i < rows.length; i++) {
+            const cells = rows[i].querySelectorAll('td');
+            if (cells.length < 2) continue;
+            const label = (cells[0]?.innerText || '').trim();
+            if (!label || label === 'Dados Técnicos') continue;
+            const idx = (i + 1).toString().padStart(2, '0');
+            const hidden = document.querySelector(
+                `input[name$='dgDadosTecnicos$ctl${idx}$hdnDtTexto']`
+            );
+            const naCheckbox = document.querySelector(
+                `input[name$='dgDadosTecnicos$ctl${idx}$ckIsNA']`
+            );
+            const value = hidden ? hidden.value.trim() : '';
+            const isNA = naCheckbox ? naCheckbox.checked : false;
+            data.attributes.push({label, value: value || (isNA ? 'N/A' : ''), isNA});
+        }
+        return data;
+    }""")
+
+    # Voltar da DescricaoV3 se entramos
+    if found and "ITEM_Edita_DescricaoV3" in page.url:
+        await page.evaluate("""() => {
+            const btn = document.querySelector('#butSIN_Voltar');
+            if (btn) btn.click();
+        }""")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(1000)
+        await page.evaluate("""() => {
+            const btn = document.querySelector("input[value='Atuar no Item']");
+            if (btn) btn.click();
+        }""")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:
+            pass
+
+    return result
+
+
+# ─── Core: verify + fix em uma passagem ───────────────────────
+
+
+async def verify_and_fix_sin(
+    page, sin: str, item: dict, *, verify_only: bool = False,
+) -> dict:
+    """Verifica um SIN. Se divergente e não verify_only, corrige na hora."""
+    result = {
+        "sin": sin,
+        "status": "ok",
+        "item_status": "",
+        "diffs": [],
+        "fixed": [],
+        "warnings": [],
+        "elapsed": 0,
+    }
+    start = time.time()
+    worklist_page = page
+    item_page = page
+
+    try:
+        await _navigate_to_worklist(page)
+
+        # Abrir SIN
+        item_page = await _search_and_open_sin(page, sin)
+        log.debug(f"  Aba do item: {item_page.url}")
+
+        # Status
+        item_status = await _get_status(item_page)
+        result["item_status"] = item_status
+
+        # Atuar no Item via __doPostBack
+        await item_page.evaluate("""() => {
+            window.confirm = () => true;
+            window.alert = () => {};
+            const btn = document.querySelector("input[value='Atuar no Item']");
+            if (btn) btn.click();
+        }""")
+        await item_page.wait_for_load_state("networkidle")
+        await item_page.wait_for_timeout(2000)
+
+        # Detectar se Atuar abriu outra aba
+        for p in page.context.pages:
+            if p != worklist_page and p != item_page and "ITEM_Edita" in p.url:
+                item_page = p
+                await item_page.wait_for_load_state("networkidle")
+                break
+
+        await item_page.evaluate("""() => {
+            const div1 = document.querySelector('#div1');
+            if (div1) div1.style.pointerEvents = 'none';
+            const pg2 = document.querySelector('#pg-2');
+            if (pg2) pg2.style.pointerEvents = 'none';
+        }""")
+
+        # ── VERIFY: ler todos os campos ──
+
+        # UNSPSC
+        needs_unspsc = False
+        if item.get("unspsc"):
+            actual_unspsc = await _read_unspsc(item_page)
+            expected_unspsc = str(item["unspsc"]).strip()
+            if expected_unspsc.upper() != actual_unspsc.upper():
+                result["diffs"].append({
+                    "field": "UNSPSC", "expected": expected_unspsc, "actual": actual_unspsc,
+                })
+                needs_unspsc = True
+
+        # NCM
+        needs_ncm = False
+        if item.get("ncm"):
+            actual_ncm = await _read_ncm(item_page)
+            expected_ncm = _format_ncm(str(item["ncm"]))
+            if expected_ncm.upper() != actual_ncm.upper():
+                result["diffs"].append({
+                    "field": "NCM", "expected": expected_ncm, "actual": actual_ncm,
+                })
+                needs_ncm = True
+
+        # Referências
+        needs_reference = False
+        actual_refs = await _read_references(item_page)
+        if item.get("part_number"):
+            expected_pn = str(item["part_number"]).strip()
+            found_pn = any(
+                expected_pn in ref.get("partNumber", "") or expected_pn in ref.get("raw", "")
+                for ref in actual_refs
+            )
+            if not found_pn:
+                result["diffs"].append({
+                    "field": "Referência",
+                    "expected": f"{item.get('empresa', '')} / {expected_pn}",
+                    "actual": json.dumps(actual_refs, ensure_ascii=False) if actual_refs else "(nenhuma)",
+                })
+                needs_reference = True
+
+        # Relacionamentos
+        needs_relationship = False
+        actual_rels = await _read_relationships(item_page)
+        if item.get("codigo_60"):
+            expected_code = str(item["codigo_60"]).strip()
+            matching = [r for r in actual_rels if r["tipo"].upper() == RELATIONSHIP_TYPE.upper()]
+            if not matching or not any(r["codigo"] == expected_code for r in matching):
+                result["diffs"].append({
+                    "field": "Relacionamento",
+                    "expected": f"{RELATIONSHIP_TYPE} / {expected_code}",
+                    "actual": ", ".join(f"{r['tipo']}/{r['codigo']}" for r in matching) or "(nenhum)",
+                })
+                needs_relationship = True
+
+        # Mídias
+        needs_media = False
+        actual_media = await _read_media_count(item_page)
+        doc_files = item.get("_doc_files", [])
+        expected_docs = len(doc_files) if doc_files else 0
+        if expected_docs > 0 and actual_media < expected_docs:
+            result["diffs"].append({
+                "field": "Mídias", "expected": str(expected_docs), "actual": str(actual_media),
+            })
+            needs_media = True
+        elif actual_media > expected_docs and expected_docs > 0:
+            result["warnings"].append(
+                f"Mídias a mais: esperado {expected_docs}, encontrado {actual_media}"
+            )
+
+        # PDM / Atributos
+        needs_pdm = False
+        needs_attributes = False
+        pdm_data = await _read_pdm_and_attributes(item_page)
+        if item.get("pdm") and not pdm_data.get("padronizado", True):
+            result["diffs"].append({
+                "field": "PDM",
+                "expected": str(item["pdm"]),
+                "actual": "(NÃO-PADRONIZADO)",
+            })
+            needs_pdm = True
+
+        expected_attrs = item.get("attributes", [])
+        actual_attrs = pdm_data.get("attributes", [])
+        for i, attr in enumerate(actual_attrs):
+            if i >= len(expected_attrs):
+                break
+            exp_val = expected_attrs[i]
+            if exp_val is None or (isinstance(exp_val, str) and exp_val.strip() == ""):
+                exp_val = "N/A"
+            else:
+                exp_val = str(exp_val).strip()
+            act_val = attr.get("value", "") or ("N/A" if attr.get("isNA") else "")
+            if exp_val.upper() != act_val.upper():
+                result["diffs"].append({
+                    "field": f"Atributo: {attr.get('label', f'Atrib_{i+1}')}",
+                    "expected": exp_val, "actual": act_val or "(vazio)",
+                })
+                needs_attributes = True
+
+        # Se PDM errado, atributos também precisam ser refeitos
+        if needs_pdm:
+            needs_attributes = True
+
+        # ── Se OK, encerrar ──
+        if not result["diffs"]:
+            result["status"] = "ok"
+            result["elapsed"] = round(time.time() - start, 1)
+            return result
+
+        # ── Se verify_only, não corrigir ──
+        if verify_only:
+            result["status"] = "divergente"
+            result["elapsed"] = round(time.time() - start, 1)
+            return result
+
+        # ── FIX: corrigir apenas campos divergentes ──
+        log.info(f"  Divergências: {', '.join(d['field'] for d in result['diffs'])} — corrigindo...")
+
+        # Checar se precisa retornar etapa
+        if item_status == "APROVACAO-TECNICA":
+            # Voltar para SIN_Item_Resultante para retornar etapa
+            await item_page.evaluate("""() => {
+                const links = document.querySelectorAll('a');
+                const v = Array.from(links).find(a => a.innerText.trim() === 'Voltar');
+                if (v) v.click();
+            }""")
+            await item_page.wait_for_load_state("networkidle")
+            await item_page.wait_for_timeout(2000)
+
+            ok = await _retornar_etapa(item_page)
+            if not ok:
+                result["status"] = "fix_failed"
+                result["elapsed"] = round(time.time() - start, 1)
+                return result
+
+            # Re-entrar em edição
+            await item_page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                __doPostBack('ctl00$Body$butAcao3', '');
+            }""")
+            await item_page.wait_for_load_state("networkidle")
+            await item_page.wait_for_timeout(2000)
+            await hide_overlays(item_page)
+
+        # Corrigir cada campo divergente
+        try:
+            if needs_unspsc and item.get("unspsc"):
+                await fill_unspsc(item_page, str(item["unspsc"]))
+                result["fixed"].append("UNSPSC")
+                log.info(f"  ✓ UNSPSC corrigido: {item['unspsc']}")
+
+            if needs_ncm and item.get("ncm"):
+                await fill_ncm(item_page, str(item["ncm"]))
+                result["fixed"].append("NCM")
+                log.info(f"  ✓ NCM corrigido: {item['ncm']}")
+
+            if needs_reference and item.get("empresa") and item.get("part_number"):
+                await fill_reference(item_page, str(item["empresa"]), str(item["part_number"]))
+                result["fixed"].append("Referência")
+                log.info(f"  ✓ Referência corrigida: {item['empresa']} / {item['part_number']}")
+
+            if needs_relationship and item.get("codigo_60"):
+                await fill_relationship(item_page, str(item["codigo_60"]))
+                result["fixed"].append("Relacionamento")
+                log.info(f"  ✓ Relacionamento corrigido: {item['codigo_60']}")
+
+            if needs_media and doc_files:
+                await upload_documents(item_page, doc_files)
+                result["fixed"].append("Mídias")
+                log.info(f"  ✓ Mídias: {len(doc_files)} doc(s)")
+
+            # Salvar geral para limpar dirty state antes de navegar para PDM/Descrições
+            if (needs_reference or needs_relationship) and (needs_pdm or needs_attributes):
+                log.debug("  Salvando item para limpar dirty state...")
+                try:
+                    # Override confirm/alert ANTES de salvar (postback pode triggar alerts)
+                    await item_page.evaluate("""() => {
+                        window.confirm = () => true;
+                        window.alert = () => {};
+                    }""")
+                    salvar_footer = item_page.locator("#butSalvar")
+                    if await salvar_footer.count() > 0:
+                        await salvar_footer.click()
+                        await item_page.wait_for_load_state("networkidle")
+                        await item_page.wait_for_timeout(2000)
+                        # Re-override após postback (o JS é recarregado)
+                        await item_page.evaluate("""() => {
+                            window.confirm = () => true;
+                            window.alert = () => {};
+                        }""")
+                        await hide_overlays(item_page)
+                        log.debug("  Item salvo")
+                except Exception as save_err:
+                    log.warning(f"  Salvar geral falhou: {save_err}")
+
+            # Validação SAP antes de PDM
+            if needs_pdm or needs_attributes:
+                await validate_sap_description(item_page)
+
+            if needs_pdm and item.get("pdm"):
+                await change_pdm(item_page, str(item["pdm"]))
+                result["fixed"].append("PDM")
+                log.info(f"  ✓ PDM corrigido: {item['pdm']}")
+
+            if needs_attributes:
+                await fill_attributes(item_page, item.get("attributes", []))
+                result["fixed"].append("Atributos")
+                log.info("  ✓ Atributos corrigidos")
+
+            # Remeter
+            if REMETER_APOS_FIX:
+                remeter = item_page.locator("input[value='Remeter Modec']")
+                if await remeter.count() > 0:
+                    await remeter.click()
+                    await item_page.wait_for_timeout(3000)
+                    sim_btn = item_page.locator("input[value='Sim']")
+                    try:
+                        await sim_btn.click(timeout=5000)
+                        await item_page.wait_for_load_state("networkidle")
+                        result["fixed"].append("Remetido")
+                    except Exception:
+                        pass
+
+            result["status"] = "corrigido"
+
+        except Exception as fix_err:
+            log.error(f"  Erro ao corrigir: {fix_err}")
+            result["status"] = "fix_failed"
+            result["warnings"].append(f"Fix falhou: {str(fix_err)[:200]}")
+
+    except Exception as e:
+        result["status"] = "error"
+        result["diffs"].append({"field": "ERRO", "expected": "", "actual": str(e)})
+        log.error(f"  Erro ao processar SIN {sin}: {e}")
+
+    finally:
+        # Fechar abas extras
+        if item_page != worklist_page:
+            try:
+                if not item_page.is_closed():
+                    await item_page.close()
+            except Exception:
+                pass
+
+    result["elapsed"] = round(time.time() - start, 1)
+    return result
+
+
+# ─── Main ─────────────────────────────────────────────────────
+
+
+async def run():
+    log.info("=" * 60)
+    log.info("Verify & Fix — Início")
+    log.info("=" * 60)
+
+    verify_only = "--verify-only" in sys.argv
+    only_divergent = "--only-divergent" in sys.argv
+    cli_sins = [s for s in sys.argv[1:] if not s.startswith("--")]
+
+    # Suporte a --file=lista.txt
+    for arg in sys.argv[1:]:
+        if arg.startswith("--file="):
+            filepath = Path(arg.split("=", 1)[1])
+            cli_sins = [s.strip() for s in filepath.read_text().splitlines() if s.strip()]
+
+    # Ler Excel
+    wb, items = load_excel()
+    items = validate_documents(items)
+    sin_data = {}
+    for item in items:
+        sin = str(item.get("sin", ""))
+        if sin:
+            sin_data[sin] = item
+
+    # Carregar report existente
+    report = _load_report()
+
+    if only_divergent:
+        divergent_sins = [
+            r["sin"] for r in report.get("results", [])
+            if r.get("status") in ("divergente", "error", "fix_failed")
+        ]
+        # Remover do report os que vamos re-processar
+        report["results"] = [
+            r for r in report.get("results", [])
+            if r.get("status") not in ("divergente", "error", "fix_failed")
+        ]
+        sins_to_process = [s for s in divergent_sins if s in sin_data]
+        log.info(f"--only-divergent: {len(sins_to_process)} SINs a re-processar")
+    elif cli_sins:
+        sins_to_process = cli_sins
+        # Remover resultados antigos desses SINs
+        sins_set = set(sins_to_process)
+        report["results"] = [r for r in report.get("results", []) if r["sin"] not in sins_set]
+        log.info(f"{len(sins_to_process)} SINs via CLI/arquivo")
+    else:
+        sins_to_process = list(sin_data.keys())
+
+    if verify_only:
+        log.info("Modo: VERIFY ONLY (sem correção)")
+    else:
+        log.info("Modo: VERIFY + FIX")
+
+    log.info(f"SINs a processar: {len(sins_to_process)}")
+
+    # Recontabilizar counts
+    counts = {}
+    for r in report.get("results", []):
+        s = r.get("status", "error")
+        counts[s] = counts.get(s, 0) + 1
+
+    # Browser
+    pw = await async_playwright().start()
+    context = await pw.chromium.launch_persistent_context(
+        user_data_dir=PROFILE_DIR,
+        headless=HEADLESS,
+        slow_mo=SLOW_MO,
+        viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
+        args=[f"--window-size={VIEWPORT_WIDTH},{VIEWPORT_HEIGHT}"],
+    )
+    context.set_default_timeout(30_000)
+    context.set_default_navigation_timeout(60_000)
+    page = context.pages[0] if context.pages else await context.new_page()
+    page.on("dialog", handle_dialog)
+
+    # Navegar para worklist
+    try:
+        await page.goto(
+            "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+            wait_until="networkidle",
+        )
+        await page.click("text=Acompanhamento das Solicitações (Worklist)")
+        await page.wait_for_load_state("networkidle")
+        await page.select_option(
+            "select:has(option[value='SOMENTE_REC_ACAO'])",
+            label="Todas as Solicitações",
+        )
+        await page.evaluate("() => { pesquisar(0, ''); }")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(3000)
+    except Exception as e:
+        log.error(f"Falha ao inicializar worklist: {e}")
+        log.info("Aguardando 60s para login manual...")
+        await asyncio.sleep(60)
+
+    all_results = report.get("results", [])
+
+    for i, sin in enumerate(sins_to_process):
+        if sin not in sin_data:
+            log.warning(f"SIN {sin} não encontrado na planilha — pulando")
+            counts["not_found"] = counts.get("not_found", 0) + 1
+            continue
+
+        log.info(f"[{i+1}/{len(sins_to_process)}] SIN {sin}...")
+
+        try:
+            result = await verify_and_fix_sin(
+                page, sin, sin_data[sin], verify_only=verify_only,
+            )
+            all_results.append(result)
+            counts[result["status"]] = counts.get(result["status"], 0) + 1
+
+            # Log
+            st = result["status"]
+            elapsed = result["elapsed"]
+            if st == "ok":
+                log.info(f"  ✓ OK ({elapsed:.1f}s)")
+            elif st == "corrigido":
+                fixed_str = ", ".join(result["fixed"])
+                log.info(f"  ✓ CORRIGIDO: {fixed_str} ({elapsed:.1f}s)")
+            elif st == "divergente":
+                diffs_str = ", ".join(d["field"] for d in result["diffs"])
+                log.warning(f"  ✗ DIVERGENTE: {diffs_str} ({elapsed:.1f}s)")
+            elif st == "fix_failed":
+                diffs_str = ", ".join(d["field"] for d in result["diffs"])
+                log.error(f"  ✗ FIX FALHOU: {diffs_str} ({elapsed:.1f}s)")
+            else:
+                log.error(f"  ! ERRO ({elapsed:.1f}s)")
+
+            # Voltar para worklist
+            try:
+                await _voltar_worklist(page)
+            except Exception as nav_err:
+                log.warning(f"Erro ao voltar para worklist: {nav_err}")
+                try:
+                    for p in context.pages[1:]:
+                        await p.close()
+                    page = await context.new_page()
+                    page.on("dialog", handle_dialog)
+                    await page.goto(
+                        "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+                        wait_until="networkidle",
+                    )
+                    await _voltar_worklist(page)
+                except Exception:
+                    log.error("Recuperação falhou — encerrando")
+                    break
+            await asyncio.sleep(5)
+
+        except Exception as e:
+            log.error(f"Erro fatal SIN {sin}: {e}")
+            counts["error"] = counts.get("error", 0) + 1
+            all_results.append({
+                "sin": sin, "status": "error",
+                "diffs": [{"field": "ERRO FATAL", "expected": "", "actual": str(e)}],
+                "fixed": [], "warnings": [], "elapsed": 0,
+            })
+            try:
+                await _voltar_worklist(page)
+            except Exception:
+                try:
+                    for p_tab in context.pages[1:]:
+                        await p_tab.close()
+                    page = await context.new_page()
+                    page.on("dialog", handle_dialog)
+                    await page.goto(
+                        "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+                        wait_until="networkidle",
+                    )
+                    await _voltar_worklist(page)
+                except Exception:
+                    log.error("Recuperação falhou — encerrando")
+                    break
+
+        # Salvar incrementalmente
+        report["total"] = len(sins_to_process)
+        report["counts"] = counts
+        report["results"] = all_results
+        _save_report(report)
+
+    # Resumo
+    log.info("=" * 60)
+    log.info("RESUMO")
+    log.info("=" * 60)
+    log.info(f"  Total processados: {sum(counts.values())}")
+    for status_name in ("ok", "corrigido", "divergente", "fix_failed", "error"):
+        if counts.get(status_name, 0) > 0:
+            log.info(f"  {status_name:15s}: {counts[status_name]}")
+    log.info("=" * 60)
+
+    await context.close()
+    await pw.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(run())
