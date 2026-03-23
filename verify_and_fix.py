@@ -69,6 +69,8 @@ def _save_report(report: dict):
 
 
 async def handle_dialog(dialog: Dialog):
+    import browser as _browser
+    _browser.last_dialog_message = dialog.message
     log.debug(f"Dialog ({dialog.type}): {dialog.message}")
     await dialog.accept()
 
