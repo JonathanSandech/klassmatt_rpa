@@ -192,14 +192,33 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
                     pass
             await page.wait_for_timeout(1000)
 
-            # Verificar se Finalizar foi rejeitado (alert de dados técnicos incompletos)
+            # Verificar se Finalizar foi rejeitado
             if "ITEM_Edita_DescricaoV3" in page.url:
                 last_msg = _browser.last_dialog_message.lower()
                 if "preencher" in last_msg or "verificar" in last_msg or "dados técnicos" in last_msg:
                     log.warning(f"Finalizar rejeitado: '{_browser.last_dialog_message}' — atributos não salvos")
                     _finalizar_ok = False
+                elif "já existe" in last_msg or "referência" in last_msg or "em uso" in last_msg:
+                    # Confirm de item duplicado — já foi aceito pelo dialog handler.
+                    # Tentar Finalizar novamente (o confirm bloqueou o primeiro)
+                    log.debug(f"Confirm de duplicata aceito: '{_browser.last_dialog_message}' — re-tentando Finalizar")
+                    _browser.last_dialog_message = ""
+                    try:
+                        await finalizar_btn.click()
+                        await page.wait_for_load_state("networkidle", timeout=15_000)
+                    except Exception:
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=15_000)
+                        except Exception:
+                            pass
+                    await page.wait_for_timeout(1000)
+                    if "ITEM_Edita_DescricaoV3" not in page.url:
+                        log.debug("Atributos finalizados após retry")
+                    else:
+                        log.warning("Ainda na DescricaoV3 após retry Finalizar")
+                        _finalizar_ok = False
                 else:
-                    log.warning("Ainda na DescricaoV3 após Finalizar — pode não ter salvo")
+                    log.warning(f"Ainda na DescricaoV3 após Finalizar (msg: '{_browser.last_dialog_message}')")
                     _finalizar_ok = False
             else:
                 log.debug("Atributos finalizados e salvos com sucesso")
