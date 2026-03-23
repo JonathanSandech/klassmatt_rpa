@@ -401,12 +401,11 @@ async def verify_and_fix_sin(
         item_status = await _get_status(item_page)
         result["item_status"] = item_status
 
-        # Atuar no Item via __doPostBack
+        # Atuar no Item via __doPostBack (btn.click() não trigga postback ASP.NET)
         await item_page.evaluate("""() => {
             window.confirm = () => true;
             window.alert = () => {};
-            const btn = document.querySelector("input[value='Atuar no Item']");
-            if (btn) btn.click();
+            __doPostBack('ctl00$Body$butAcao3', '');
         }""")
         await item_page.wait_for_load_state("networkidle")
         await item_page.wait_for_timeout(2000)
@@ -418,12 +417,8 @@ async def verify_and_fix_sin(
                 await item_page.wait_for_load_state("networkidle")
                 break
 
-        await item_page.evaluate("""() => {
-            const div1 = document.querySelector('#div1');
-            if (div1) div1.style.pointerEvents = 'none';
-            const pg2 = document.querySelector('#pg-2');
-            if (pg2) pg2.style.pointerEvents = 'none';
-        }""")
+        await hide_overlays(item_page)
+        log.debug(f"  Página de edição: {item_page.url}")
 
         # ── VERIFY: ler todos os campos ──
 
