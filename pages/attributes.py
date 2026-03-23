@@ -333,16 +333,22 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         # Usar evaluate pois pode haver milhares de nós (1900+)
         found = await popup_page.evaluate(
             """(value) => {
-                const nodes = document.querySelectorAll('a.nodeStyle, a.nodeStyleSel');
+                // Filter only VISIBLE nodes — collapsed sub-nodes (e.g. PORCA under PARAFUSO)
+                // have zero bounding rect and must be excluded to avoid wrong selection
+                const allNodes = document.querySelectorAll('a.nodeStyle, a.nodeStyleSel');
+                const nodes = Array.from(allNodes).filter(a => {
+                    const r = a.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                });
                 const upper = value.toUpperCase().trim();
 
                 // 1. Exact match
-                let target = Array.from(nodes).find(a => a.innerText.trim() === value);
+                let target = nodes.find(a => a.innerText.trim() === value);
                 let matchType = 'exact';
 
                 // 2. Case-insensitive exact
                 if (!target) {
-                    target = Array.from(nodes).find(a => a.innerText.trim().toUpperCase() === upper);
+                    target = nodes.find(a => a.innerText.trim().toUpperCase() === upper);
                     matchType = 'case-insensitive';
                 }
 
