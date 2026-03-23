@@ -1,4 +1,12 @@
-"""Upload de documentos na aba Mídias."""
+"""Upload de documentos na aba Mídias.
+
+Resilience notes (2026-03):
+    - "Adicionar Mídia" é um link __doPostBack dentro de um DataList (dlMidias).
+    - Após uploads consecutivos (5+ docs), o ASP.NET re-render pode falhar
+      e o link desaparece do DOM. Retry 0% eficaz sem reabrir a aba.
+    - Fix: safe_click com timeout curto → fallback __doPostBack direto →
+      fallback fechar/reabrir aba Mídias.
+"""
 
 import re
 from pathlib import Path
@@ -10,11 +18,141 @@ from browser import safe_click, safe_fill
 from logger import log
 
 
+async def _open_media_tab(page: Page) -> Page:
+    """Abre a aba Mídias (Midia.aspx) e retorna a page da nova aba."""
+    pages_before = len(page.context.pages)
+    await safe_click(page, SELECTORS["tab_midias"])
+
+    # Aguardar nova aba abrir
+    for _ in range(10):
+        await page.wait_for_timeout(1000)
+        if len(page.context.pages) > pages_before:
+            break
+
+    # Encontrar a aba de mídias pela URL
+    for p in page.context.pages:
+        if "Midia.aspx" in p.url:
+            await p.wait_for_load_state("networkidle")
+            return p
+
+    log.warning("Aba de Mídias não abriu separadamente — usando página atual")
+    return page
+
+
+async def _close_media_tab(media_page: Page, main_page: Page) -> None:
+    """Fecha a aba Mídias e volta pra página principal."""
+    if media_page == main_page:
+        fechar_btn = media_page.locator(SELECTORS["media_fechar_btn"])
+        if await fechar_btn.count() > 0:
+            await fechar_btn.click()
+            await main_page.wait_for_timeout(500)
+        return
+
+    fechar_btn = media_page.locator(SELECTORS["media_fechar_btn"])
+    if await fechar_btn.count() > 0:
+        try:
+            await fechar_btn.click()
+        except Exception:
+            pass  # cmdFechar tem onclick=window.close()
+    if not media_page.is_closed():
+        await media_page.close()
+    await main_page.bring_to_front()
+
+
+async def _get_existing_docs(media_page: Page) -> dict:
+    """Retorna contagem e nomes dos documentos já existentes na aba Mídias."""
+    return await media_page.evaluate(
+        """() => {
+            const names = [];
+            const allText = document.body.innerText || '';
+            const pdfMatch = allText.match(/PDF\\s*\\((\\d+)\\)/);
+            let count = pdfMatch ? parseInt(pdfMatch[1]) : 0;
+
+            const mediaLinks = document.querySelectorAll('a[href*="GetMidia"], a[href*="getMidia"], a[onclick*="Midia"]');
+            if (mediaLinks.length > count) count = mediaLinks.length;
+
+            const gridRows = document.querySelectorAll('tr:has(a[href*="Midia"]), tr:has(img[src*="pdf"]), tr:has(img[src*="icon"])');
+            if (gridRows.length > count) count = gridRows.length;
+
+            const spans = document.querySelectorAll('span, td, div, a');
+            for (const s of spans) {
+                const text = (s.innerText || s.textContent || '').trim();
+                if (text.match(/^\\d{4}-\\d{2}-\\d{4}/) || text.match(/\\.pdf$/i)) {
+                    names.push(text.replace(/\\.pdf$/i, ''));
+                }
+            }
+            const uniqueNames = [...new Set(names)];
+            if (uniqueNames.length > count) count = uniqueNames.length;
+
+            return { count, names: uniqueNames };
+        }"""
+    )
+
+
+async def _click_adicionar_midia(media_page: Page) -> bool:
+    """Clica em "Adicionar Mídia" com fallback resiliente.
+
+    1. safe_click com timeout curto (5s)
+    2. Fallback: extrair __doPostBack target do link e chamar direto via JS
+    3. Se ambos falharem, retorna False (caller deve reabrir a aba)
+    """
+    # Tentativa 1: safe_click com timeout curto
+    try:
+        await safe_click(media_page, SELECTORS["media_add_link"], timeout=5000)
+        await media_page.wait_for_load_state("networkidle")
+        return True
+    except Exception:
+        log.debug("safe_click 'Adicionar Mídia' falhou — tentando __doPostBack direto")
+
+    # Tentativa 2: extrair target do link e chamar __doPostBack direto
+    try:
+        clicked = await media_page.evaluate(
+            """() => {
+                // Buscar link "Adicionar Mídia" e extrair __doPostBack target
+                const links = document.querySelectorAll('a');
+                const addLink = Array.from(links).find(a => a.innerText.includes('Adicionar'));
+                if (addLink) {
+                    const href = addLink.getAttribute('href') || '';
+                    const match = href.match(/__doPostBack\\('([^']+)'/);
+                    if (match) {
+                        __doPostBack(match[1], '');
+                        return 'postback';
+                    }
+                    // Fallback: click direto no link
+                    addLink.click();
+                    return 'click';
+                }
+                // Último recurso: tentar o target padrão do DataList
+                if (typeof __doPostBack === 'function') {
+                    // Buscar qualquer Linkbutton1 no dlMidias
+                    const btn = document.querySelector("a[id='Linkbutton1']");
+                    if (btn) {
+                        const href = btn.getAttribute('href') || '';
+                        const match = href.match(/__doPostBack\\('([^']+)'/);
+                        if (match) {
+                            __doPostBack(match[1], '');
+                            return 'postback-fallback';
+                        }
+                    }
+                }
+                return null;
+            }"""
+        )
+        if clicked:
+            log.debug(f"Adicionar Mídia via JS: {clicked}")
+            await media_page.wait_for_load_state("networkidle")
+            return True
+    except Exception as e:
+        log.debug(f"__doPostBack fallback falhou: {e}")
+
+    return False
+
+
 async def upload_documents(page: Page, doc_files: list[str]) -> None:
     """Faz upload de documentos para a aba Mídias.
 
-    Usa Playwright file chooser nativo — resolve o problema do popup Windows
-    que o PAD não tratava bem.
+    Usa Playwright file chooser nativo. Se "Adicionar Mídia" desaparecer
+    após uploads consecutivos, fecha e reabre a aba Mídias.
     """
     if not doc_files:
         log.info("Nenhum documento para upload")
@@ -37,62 +175,11 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
 
     log.info(f"Fazendo upload de {expected_count} documento(s)")
 
-    # Navegar para aba Mídias (abre em nova aba no browser)
-    pages_before = len(page.context.pages)
-    await safe_click(page, SELECTORS["tab_midias"])
+    # Abrir aba Mídias
+    media_page = await _open_media_tab(page)
 
-    # Aguardar nova aba abrir
-    media_page = page
-    for _ in range(10):
-        await page.wait_for_timeout(1000)
-        if len(page.context.pages) > pages_before:
-            break
-
-    # Encontrar a aba de mídias pela URL (Midia.aspx)
-    for p in page.context.pages:
-        if "Midia.aspx" in p.url:
-            media_page = p
-            await media_page.wait_for_load_state("networkidle")
-            break
-
-    if media_page == page:
-        log.warning("Aba de Mídias não abriu separadamente — usando página atual")
-
-    # Verificar documentos já existentes DENTRO da aba de mídias (mais confiável que o label)
-    existing_docs = await media_page.evaluate(
-        """() => {
-            const names = [];
-            // 1. Contar via regex PDF(N) no texto da página
-            const allText = document.body.innerText || '';
-            const pdfMatch = allText.match(/PDF\\s*\\((\\d+)\\)/);
-            let count = pdfMatch ? parseInt(pdfMatch[1]) : 0;
-
-            // 2. Contar thumbnails/links de mídia (mais confiável)
-            // Mídias aparecem como links com ícone ou como linhas numa grid
-            const mediaLinks = document.querySelectorAll('a[href*="GetMidia"], a[href*="getMidia"], a[onclick*="Midia"]');
-            if (mediaLinks.length > count) count = mediaLinks.length;
-
-            // 3. Contar por linhas de repeater/grid de mídias
-            const gridRows = document.querySelectorAll('tr:has(a[href*="Midia"]), tr:has(img[src*="pdf"]), tr:has(img[src*="icon"])');
-            if (gridRows.length > count) count = gridRows.length;
-
-            // 4. Pegar nomes dos documentos existentes
-            const spans = document.querySelectorAll('span, td, div, a');
-            for (const s of spans) {
-                const text = (s.innerText || s.textContent || '').trim();
-                // Padrão de nome de documento: XXXX-XX-XXXX-... ou qualquer nome com extensão
-                if (text.match(/^\\d{4}-\\d{2}-\\d{4}/) || text.match(/\\.pdf$/i)) {
-                    names.push(text.replace(/\\.pdf$/i, ''));
-                }
-            }
-            // Deduplicate names
-            const uniqueNames = [...new Set(names)];
-            if (uniqueNames.length > count) count = uniqueNames.length;
-
-            return { count, names: uniqueNames };
-        }"""
-    )
-
+    # Verificar documentos já existentes DENTRO da aba de mídias
+    existing_docs = await _get_existing_docs(media_page)
     existing_count = existing_docs.get("count", 0)
     existing_names = existing_docs.get("names", [])
 
@@ -101,13 +188,7 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
             f"Mídias já existem na aba ({existing_count} PDFs >= {expected_count} esperados) — pulando. "
             f"Docs: {existing_names}"
         )
-        # Fechar aba de mídias
-        if media_page != page:
-            try:
-                await media_page.close()
-            except Exception:
-                pass
-            await page.bring_to_front()
+        await _close_media_tab(media_page, page)
         return
 
     # Calcular quantos docs faltam
@@ -121,7 +202,6 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
             continue
         doc_name = doc_path.stem
 
-        # Verificar se este documento específico já foi uploaded
         already_uploaded = any(doc_name in existing for existing in existing_names)
         if already_uploaded:
             log.debug(f"Documento '{doc_name}' já existe na aba de mídias — pulando")
@@ -131,20 +211,35 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
 
     if not docs_to_upload:
         log.info("Todos os documentos já foram uploaded — nada a fazer")
-        if media_page != page:
-            try:
-                await media_page.close()
-            except Exception:
-                pass
-            await page.bring_to_front()
+        await _close_media_tab(media_page, page)
         return
 
-    for doc_path, doc_name in docs_to_upload:
-        log.debug(f"Uploading: {doc_name}")
+    for i, (doc_path, doc_name) in enumerate(docs_to_upload):
+        log.debug(f"Uploading ({i+1}/{len(docs_to_upload)}): {doc_name}")
 
-        # Clicar em "Adicionar Mídia"
-        await safe_click(media_page, SELECTORS["media_add_link"])
-        await media_page.wait_for_load_state("networkidle")
+        # Clicar em "Adicionar Mídia" (com fallback resiliente)
+        add_ok = await _click_adicionar_midia(media_page)
+
+        if not add_ok:
+            # Último recurso: fechar e reabrir aba Mídias pra forçar re-render
+            log.warning("Adicionar Mídia não disponível — reabrindo aba Mídias")
+            await _close_media_tab(media_page, page)
+            await page.wait_for_timeout(2000)
+            media_page = await _open_media_tab(page)
+
+            # Tentar de novo após reabrir
+            add_ok = await _click_adicionar_midia(media_page)
+            if not add_ok:
+                log.error(f"Adicionar Mídia falhou mesmo após reabrir aba — abortando upload de '{doc_name}'")
+                break
+
+        # Verificar se o form de upload apareceu
+        file_input = media_page.locator(SELECTORS["media_file_input"])
+        try:
+            await file_input.wait_for(state="visible", timeout=5000)
+        except Exception:
+            log.warning(f"Form de upload não apareceu para '{doc_name}' — pulando")
+            continue
 
         # Usar file chooser do Playwright (evita popup Windows)
         async with media_page.expect_file_chooser() as fc_info:
@@ -166,20 +261,6 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
         log.debug(f"Documento '{doc_name}' uploaded")
 
     # Fechar aba de mídias e voltar à página principal
-    if media_page != page:
-        fechar_btn = media_page.locator(SELECTORS["media_fechar_btn"])
-        if await fechar_btn.count() > 0:
-            try:
-                await fechar_btn.click()
-            except Exception:
-                pass  # cmdFechar tem onclick=window.close() — página fecha imediatamente
-        if not media_page.is_closed():
-            await media_page.close()
-        await page.bring_to_front()
-    else:
-        fechar_btn = media_page.locator(SELECTORS["media_fechar_btn"])
-        if await fechar_btn.count() > 0:
-            await fechar_btn.click()
-            await page.wait_for_timeout(500)
+    await _close_media_tab(media_page, page)
 
     log.info(f"Upload de {len(docs_to_upload)} documento(s) concluído")

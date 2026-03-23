@@ -43,59 +43,86 @@ async def search_and_select_sin(page: Page, sin: str) -> None:
     log.info(f"SIN {sin} selecionado")
 
 
-async def atuar_no_item(page: Page) -> None:
-    """Clica em 'Atuar no Item' e aguarda navegação para página de edição.
+async def atuar_no_item(page: Page) -> str | None:
+    """Clica em 'Atuar no Item' (ou 'Atuar na SIN') e aguarda navegação.
 
-    Para SINs em CATALOGACAO-MODEC, o abreSIN() abre SIN_Resumo com botão
-    'Atuar na SIN' (butAcao3) em vez de 'Atuar no Item'. Nesse caso:
-    1. Atuar na SIN → aparece 'Criar item'
-    2. Criar item → vai para DescricaoV3
-    3. Finalizar → volta para ITEM_Edita
-    4. Salvar → Sim → item criado em FINALIZACAO
+    Detecta o estado da página SIN_Item_Resultante ANTES de clicar:
+    - Botão disabled (APROVACAO-TECNICA etc.) → retorna status para skip
+    - 'Atuar na SIN' (CATALOGACAO-MODEC) → fluxo criar item
+    - 'Atuar no Item' enabled (FINALIZACAO) → fluxo normal
+
+    Retorna None se conseguiu entrar na edição, ou o status string se
+    o item não pode ser editado (caller deve pular).
     """
     # Se já estamos em ITEM_Edita.aspx, não precisa clicar
     if "ITEM_Edita.aspx" in page.url:
         log.debug("Já em ITEM_Edita.aspx — pulando 'Atuar no Item'")
-        return
+        return None
 
     # Override confirm para aceitar "outro usuário atuando" automaticamente
     await page.evaluate("() => { window.confirm = () => true; }")
 
-    # Verificar se tem "Atuar na SIN" (CATALOGACAO-MODEC) em vez de "Atuar no Item"
-    atuar_sin = await page.evaluate("""() => {
-        const btn = document.querySelector('#butAcao3');
-        return btn && btn.value === 'Atuar na SIN' && btn.offsetParent !== null;
+    # Detectar estado dos botões e status ANTES de clicar
+    page_state = await page.evaluate("""() => {
+        const status = document.querySelector("input[id$='txtStatus']");
+        const statusVal = status ? status.value : '';
+
+        // Buscar botões de ação (butAcao3 = principal, butAcao2 = secundário)
+        const btn3 = document.querySelector('#butAcao3');
+        const btn2 = document.querySelector('#butAcao2');
+
+        // Buscar botão genérico "Atuar no Item"
+        const atuarItem = document.querySelector("input[value='Atuar no Item']");
+
+        return {
+            status: statusVal,
+            btn3Value: btn3 ? btn3.value : null,
+            btn3Disabled: btn3 ? btn3.disabled : true,
+            btn3Visible: btn3 ? btn3.offsetParent !== null : false,
+            btn2Value: btn2 ? btn2.value : null,
+            atuarItemExists: !!atuarItem,
+            atuarItemDisabled: atuarItem ? atuarItem.disabled : true,
+        };
     }""")
 
-    if atuar_sin:
+    status = page_state.get("status", "")
+    btn3_value = page_state.get("btn3Value")
+    btn3_disabled = page_state.get("btn3Disabled", True)
+    btn3_visible = page_state.get("btn3Visible", False)
+    atuar_disabled = page_state.get("atuarItemDisabled", True)
+
+    log.debug(f"Estado da página: status={status}, btn3={btn3_value}, disabled={btn3_disabled}")
+
+    # Botão "Atuar no Item" existe mas está disabled → item em etapa não editável
+    if page_state.get("atuarItemExists") and atuar_disabled:
+        log.info(f"Botão 'Atuar no Item' disabled — item em '{status}'")
+        return status or "disabled"
+
+    # "Atuar na SIN" (CATALOGACAO-MODEC) — fluxo de criação de item
+    if btn3_value == "Atuar na SIN" and btn3_visible and not btn3_disabled:
         log.info("SIN em CATALOGACAO-MODEC — executando fluxo Atuar na SIN → Criar item")
-        # 1. Atuar na SIN
         await page.evaluate("() => { document.querySelector('#butAcao3').click(); }")
         await page.wait_for_load_state("networkidle")
         await page.wait_for_timeout(1500)
 
-        # 2. Criar item (butAcao2)
         criar_btn = page.locator("#butAcao2")
         if await criar_btn.count() > 0:
             await page.evaluate("() => { document.querySelector('#butAcao2').click(); }")
             await page.wait_for_load_state("networkidle")
             await page.wait_for_timeout(1000)
 
-            # 3. Finalizar na DescricaoV3
             finalizar = page.locator("#butFinaliza")
             if await finalizar.count() > 0:
                 await page.evaluate("() => { document.querySelector('#butFinaliza').click(); }")
                 await page.wait_for_load_state("networkidle")
                 await page.wait_for_timeout(1000)
 
-            # 4. Salvar na ITEM_Edita
             salvar = page.locator("#butSalvar")
             if await salvar.count() > 0:
                 await page.evaluate("() => { document.querySelector('#butSalvar').click(); }")
                 await page.wait_for_load_state("networkidle")
                 await page.wait_for_timeout(1000)
 
-            # 5. Sim (confirmar criação)
             sim = page.locator("#butSim")
             if await sim.count() > 0:
                 await page.evaluate("() => { document.querySelector('#butSim').click(); }")
@@ -105,13 +132,19 @@ async def atuar_no_item(page: Page) -> None:
             log.info("Item criado via fluxo CATALOGACAO-MODEC")
         else:
             log.warning("Botão 'Criar item' não encontrado após 'Atuar na SIN'")
-        return
+        return None
 
-    # Fluxo normal: Atuar no Item (FINALIZACAO)
-    await safe_click(page, SELECTORS["atuar_no_item_btn"])
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(1000)
-    log.debug("Clicou em 'Atuar no Item'")
+    # Fluxo normal: Atuar no Item (FINALIZACAO) — botão enabled
+    if page_state.get("atuarItemExists") and not atuar_disabled:
+        await safe_click(page, SELECTORS["atuar_no_item_btn"])
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(1000)
+        log.debug("Clicou em 'Atuar no Item'")
+        return None
+
+    # Nenhum botão de ação encontrado
+    log.warning(f"Nenhum botão de ação encontrado (status={status})")
+    return status or "unknown"
 
 
 async def check_item_already_processed(page: Page) -> str | None:
