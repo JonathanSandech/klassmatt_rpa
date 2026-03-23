@@ -160,20 +160,7 @@ async def change_pdm(page: Page, pdm: str) -> bool:
     log.info(f"Alterando PDM para: {pdm}")
 
     await _click_tab(page, "Descrições")
-
-    # Verificar se realmente navegou para a aba Descrições
-    # (dirty state de outra aba pode bloquear a navegação)
-    on_desc_tab = await page.evaluate("""() => {
-        // Verificar se conteúdo de Descrições está visível
-        const descContent = document.querySelector('#txtD2, [id*="tabDescricoes"]');
-        const editLink = Array.from(document.querySelectorAll('a')).find(
-            a => a.innerText.includes('Editar Descri')
-        );
-        return !!(descContent || editLink);
-    }""")
-    if not on_desc_tab and "ITEM_Edita_DescricaoV3" not in page.url:
-        log.warning("Não conseguiu navegar para aba Descrições (dirty state?) — PDM não alterado")
-        return False
+    await page.wait_for_timeout(1000)
 
     # Verificar se PDM já está definido (idempotente)
     pdm_already_set = await page.evaluate(

@@ -664,23 +664,29 @@ async def verify_and_fix_sin(
             if needs_attributes and not needs_pdm and not needs_reference:
                 await validate_sap_description(item_page)
 
+            pdm_ok = True
             if needs_pdm and item.get("pdm"):
                 pdm_ok = await change_pdm(item_page, str(item["pdm"]))
                 if pdm_ok:
                     result["fixed"].append("PDM")
                     log.info(f"  ✓ PDM corrigido: {item['pdm']}")
                 else:
-                    result["warnings"].append("PDM falhou (dirty state ou navegação bloqueada)")
+                    result["warnings"].append("PDM falhou")
                     log.warning(f"  ✗ PDM NÃO corrigido: {item['pdm']}")
 
             if needs_attributes:
-                attr_ok = await fill_attributes(item_page, item.get("attributes", []))
-                if attr_ok:
-                    result["fixed"].append("Atributos")
-                    log.info("  ✓ Atributos corrigidos")
+                if needs_pdm and not pdm_ok:
+                    # Sem PDM correto, atributos seriam preenchidos na tabela errada
+                    result["warnings"].append("Atributos pulados (PDM não foi aplicado)")
+                    log.warning("  ✗ Atributos pulados — PDM não foi aplicado")
                 else:
-                    result["warnings"].append("Atributos falhou")
-                    log.warning("  ✗ Atributos NÃO corrigidos")
+                    attr_ok = await fill_attributes(item_page, item.get("attributes", []))
+                    if attr_ok:
+                        result["fixed"].append("Atributos")
+                        log.info("  ✓ Atributos corrigidos")
+                    else:
+                        result["warnings"].append("Atributos falhou")
+                        log.warning("  ✗ Atributos NÃO corrigidos")
 
             # Remeter
             if REMETER_APOS_FIX:
