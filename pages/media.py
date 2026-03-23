@@ -161,7 +161,7 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
         salvar_btn = media_page.locator(SELECTORS["media_salvar_btn"]).first
         await salvar_btn.click()
         await media_page.wait_for_load_state("networkidle")
-        await media_page.wait_for_timeout(2000)
+        await media_page.wait_for_timeout(1000)
 
         log.debug(f"Documento '{doc_name}' uploaded")
 
@@ -180,6 +180,6 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
         fechar_btn = media_page.locator(SELECTORS["media_fechar_btn"])
         if await fechar_btn.count() > 0:
             await fechar_btn.click()
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
 
     log.info(f"Upload de {len(docs_to_upload)} documento(s) concluído")

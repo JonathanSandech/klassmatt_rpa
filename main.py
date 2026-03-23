@@ -89,7 +89,7 @@ async def _voltar_worklist(page) -> None:
         if (p) p.click();
     }""")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(1000)
 
     # Verificar se caiu em página de erro
     if await _check_page_error(page):
@@ -231,8 +231,8 @@ async def process_item(page, item: dict, wb) -> tuple[str, list[str]]:
     t.mark("(Remeter desabilitado)")
 
     # Voltar para worklist (mesmo padrão do fix_items.py)
-    # Delay maior para evitar rate limiting do Klassmatt após salvar atributos
-    await page.wait_for_timeout(10_000)
+    # Buffer pós-atributos — rate limiting principal é o asyncio.sleep(5) entre itens
+    await page.wait_for_timeout(3_000)
     await _voltar_worklist(page)
     t.mark("Voltar Worklist")
 

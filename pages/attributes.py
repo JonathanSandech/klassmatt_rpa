@@ -43,7 +43,7 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
             }"""
         )
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(1000)
+        await page.wait_for_timeout(500)
 
         # Clicar "Editar Descrição" via JS
         found = await page.evaluate(
@@ -56,7 +56,7 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
         )
         if found:
             await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
         else:
             log.warning("Link 'Editar Descrição' não encontrado — pulando atributos")
             return False
@@ -112,7 +112,7 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
                     try:
                         if await na_el.is_checked():
                             await safe_click(page, na_selector)
-                            await page.wait_for_timeout(1000)
+                            await page.wait_for_timeout(500)
                     except Exception:
                         pass
             else:
@@ -128,7 +128,7 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
                 break
             log.debug(f"Atributo {i + 1}: N/A")
             await safe_click(page, na_selector)
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
         else:
             # Verificar se o botão de edição existe e está visível
             edit_selector = SELECTORS["attr_edit_btn_tpl"].format(idx=ctl_idx)
@@ -195,7 +195,7 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
                     await page.wait_for_load_state("networkidle", timeout=15_000)
                 except Exception:
                     pass
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
 
             # Verificar se Finalizar foi rejeitado
             if "ITEM_Edita_DescricaoV3" in page.url:
@@ -235,12 +235,12 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
         if await voltar_btn.count() > 0:
             await voltar_btn.click()
             await page.wait_for_load_state("networkidle", timeout=15_000)
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
             atuar_btn = page.locator(SELECTORS["atuar_no_item_btn"])
             if await atuar_btn.count() > 0:
                 await atuar_btn.click()
                 await page.wait_for_load_state("networkidle", timeout=15_000)
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(500)
                 log.debug("Voltou para ITEM_Edita.aspx via Atuar no Item")
             else:
                 log.debug(f"Página atual após Voltar: {page.url}")
@@ -463,7 +463,7 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
                 log.info(f"Atributo fuzzy match: '{value}' -> '{matched_text}' ({match_type})")
             else:
                 log.debug(f"Nó selecionado na árvore: '{matched_text}' ({match_type})")
-            await popup_page.wait_for_timeout(500)
+            await popup_page.wait_for_timeout(250)
 
             # Clicar em "Selecionar"
             sel_btn = popup_page.locator("#btnSelecionar")

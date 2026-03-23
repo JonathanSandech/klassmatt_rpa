@@ -17,7 +17,7 @@ async def search_and_select_sin(page: Page, sin: str) -> None:
     # Clicar em Filtrar
     await safe_click(page, SELECTORS["sin_filter_btn"])
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(5000)  # Aguardar postback ASP.NET
+    await page.wait_for_timeout(2000)  # Buffer pós-networkidle para grid popular
 
     # Verificar se há resultados na grid (estrutura de divs, não table)
     result_row = page.locator(SELECTORS["sin_result"]).first
@@ -72,35 +72,35 @@ async def atuar_no_item(page: Page) -> None:
         # 1. Atuar na SIN
         await page.evaluate("() => { document.querySelector('#butAcao3').click(); }")
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(1500)
 
         # 2. Criar item (butAcao2)
         criar_btn = page.locator("#butAcao2")
         if await criar_btn.count() > 0:
             await page.evaluate("() => { document.querySelector('#butAcao2').click(); }")
             await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(1000)
 
             # 3. Finalizar na DescricaoV3
             finalizar = page.locator("#butFinaliza")
             if await finalizar.count() > 0:
                 await page.evaluate("() => { document.querySelector('#butFinaliza').click(); }")
                 await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(1000)
 
             # 4. Salvar na ITEM_Edita
             salvar = page.locator("#butSalvar")
             if await salvar.count() > 0:
                 await page.evaluate("() => { document.querySelector('#butSalvar').click(); }")
                 await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(1000)
 
             # 5. Sim (confirmar criação)
             sim = page.locator("#butSim")
             if await sim.count() > 0:
                 await page.evaluate("() => { document.querySelector('#butSim').click(); }")
                 await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(1000)
 
             log.info("Item criado via fluxo CATALOGACAO-MODEC")
         else:
@@ -110,8 +110,7 @@ async def atuar_no_item(page: Page) -> None:
     # Fluxo normal: Atuar no Item (FINALIZACAO)
     await safe_click(page, SELECTORS["atuar_no_item_btn"])
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
-    await page.wait_for_load_state("domcontentloaded")
+    await page.wait_for_timeout(1000)
     log.debug("Clicou em 'Atuar no Item'")
 
 

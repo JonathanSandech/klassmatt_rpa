@@ -19,7 +19,7 @@ async def _click_tab(page: Page, tab_name: str) -> None:
         }}"""
     )
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(500)
     await hide_overlays(page)
 
 
@@ -65,7 +65,7 @@ async def validate_sap_description(page: Page) -> None:
             }"""
         )
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(1000)
+        await page.wait_for_timeout(500)
         await hide_overlays(page)
 
         # Desmarcar checkbox Exibe D2
@@ -111,7 +111,7 @@ async def validate_sap_description(page: Page) -> None:
                             await page.wait_for_load_state("networkidle", timeout=10_000)
                         except Exception:
                             pass
-                        await page.wait_for_timeout(1000)
+                        await page.wait_for_timeout(500)
                         break
                 except Exception:
                     continue
@@ -133,7 +133,7 @@ async def validate_sap_description(page: Page) -> None:
                 await page.wait_for_load_state("networkidle", timeout=10_000)
             except Exception:
                 pass
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
 
         # Garantir que voltamos à página de edição do item (não ficamos em página de aviso)
         if "ITEM_Edita" not in page.url:
@@ -186,7 +186,7 @@ async def change_pdm(page: Page, pdm: str) -> bool:
         )
         if found:
             await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
             await hide_overlays(page)
         else:
             log.warning("Link 'Editar Descrição' não encontrado — PDM pode já estar definido")
@@ -237,7 +237,7 @@ async def change_pdm(page: Page, pdm: str) -> bool:
         pass  # Esperado: navegação destrói contexto, mas o clique já foi disparado
     # "Alterar Padrão" navega para Pesquisa_Item.aspx (página diferente)
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(1000)
 
     # Preencher PDM no campo de busca (txtFiltro)
     pdm_input = page.locator("#txtFiltro")
@@ -249,7 +249,7 @@ async def change_pdm(page: Page, pdm: str) -> bool:
     # Clicar em Pesquisar (não Enter — Enter pode causar form submit errado)
     await safe_click(page, "input[value='Pesquisar']")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(1000)
 
     # Clicar na categoria do resultado da pesquisa (nome válido do PDM)
     # Cada PDM tem sua categoria (17100=PARTES E PECAS, 18101=KIT, etc)
@@ -279,7 +279,7 @@ async def change_pdm(page: Page, pdm: str) -> bool:
         log.warning(f"Categoria não encontrada para PDM {pdm}")
         return False
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(1000)
 
     # Clicar em "Definir Padrão" via JS
     # Isso navega de volta para ITEM_Edita_DescricaoV3.aspx
@@ -294,7 +294,7 @@ async def change_pdm(page: Page, pdm: str) -> bool:
     except Exception:
         pass  # Esperado: navegação destrói contexto, mas o clique já foi disparado
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(1500)
 
     # Garantir que voltamos para DescricaoV3 e a página está estável
     if "ITEM_Edita_DescricaoV3" not in page.url:
@@ -303,8 +303,7 @@ async def change_pdm(page: Page, pdm: str) -> bool:
             await page.wait_for_url("**/ITEM_Edita_DescricaoV3*", timeout=15_000)
         except Exception:
             log.warning(f"Não voltou para DescricaoV3 após Definir Padrão (URL={page.url})")
-    await page.wait_for_load_state("domcontentloaded")
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(1000)
 
     # NÃO clicar Finalizar aqui — Finalizar sem atributos preenchidos não salva o PDM.
     # O Finalizar será feito pelo fill_attributes() após preencher os atributos,
