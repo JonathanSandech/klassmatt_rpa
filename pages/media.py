@@ -61,23 +61,35 @@ async def upload_documents(page: Page, doc_files: list[str]) -> None:
     # Verificar documentos já existentes DENTRO da aba de mídias (mais confiável que o label)
     existing_docs = await media_page.evaluate(
         """() => {
-            // Procurar thumbnails de PDFs ou nomes de documentos existentes
-            const imgs = document.querySelectorAll('img[alt], a[href*="Midia"]');
             const names = [];
-            // Procurar textos com nomes de documento abaixo dos thumbnails
-            const allText = document.body.innerText;
+            // 1. Contar via regex PDF(N) no texto da página
+            const allText = document.body.innerText || '';
             const pdfMatch = allText.match(/PDF\\s*\\((\\d+)\\)/);
-            const count = pdfMatch ? parseInt(pdfMatch[1]) : 0;
-            // Pegar nomes dos documentos existentes
-            const spans = document.querySelectorAll('span, td, div');
+            let count = pdfMatch ? parseInt(pdfMatch[1]) : 0;
+
+            // 2. Contar thumbnails/links de mídia (mais confiável)
+            // Mídias aparecem como links com ícone ou como linhas numa grid
+            const mediaLinks = document.querySelectorAll('a[href*="GetMidia"], a[href*="getMidia"], a[onclick*="Midia"]');
+            if (mediaLinks.length > count) count = mediaLinks.length;
+
+            // 3. Contar por linhas de repeater/grid de mídias
+            const gridRows = document.querySelectorAll('tr:has(a[href*="Midia"]), tr:has(img[src*="pdf"]), tr:has(img[src*="icon"])');
+            if (gridRows.length > count) count = gridRows.length;
+
+            // 4. Pegar nomes dos documentos existentes
+            const spans = document.querySelectorAll('span, td, div, a');
             for (const s of spans) {
-                const text = s.innerText.trim();
-                // Padrão de nome de documento: XXXX-XX-XXXX-...
-                if (text.match(/^\\d{4}-\\d{2}-\\d{4}/)) {
-                    names.push(text);
+                const text = (s.innerText || s.textContent || '').trim();
+                // Padrão de nome de documento: XXXX-XX-XXXX-... ou qualquer nome com extensão
+                if (text.match(/^\\d{4}-\\d{2}-\\d{4}/) || text.match(/\\.pdf$/i)) {
+                    names.push(text.replace(/\\.pdf$/i, ''));
                 }
             }
-            return { count, names };
+            // Deduplicate names
+            const uniqueNames = [...new Set(names)];
+            if (uniqueNames.length > count) count = uniqueNames.length;
+
+            return { count, names: uniqueNames };
         }"""
     )
 

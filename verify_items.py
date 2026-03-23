@@ -25,11 +25,30 @@ from config import (
     VIEWPORT_WIDTH, VIEWPORT_HEIGHT, PROGRESS_FILE,
     RELATIONSHIP_TYPE,
 )
-from excel_handler import load_excel
+from excel_handler import load_excel, validate_documents
 from logger import log
 
 
 REPORT_FILE = Path(__file__).parent / "verify_report.json"
+
+
+def _load_report() -> dict:
+    """Carrega relatório existente ou retorna estrutura vazia."""
+    if REPORT_FILE.exists():
+        try:
+            return json.loads(REPORT_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"timestamp": "", "total": 0, "counts": {}, "results": []}
+
+
+def _save_report(report: dict):
+    """Salva relatório no disco."""
+    report["timestamp"] = datetime.now().isoformat()
+    REPORT_FILE.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 async def handle_dialog(dialog: Dialog):
@@ -139,20 +158,29 @@ async def _read_references(page) -> list[dict]:
 
     return await page.evaluate("""() => {
         const result = [];
-        // divReferencias contém "Referência/Fabricante: {partNumber}/{empresa}"
-        const div = document.querySelector('#divReferencias');
-        if (div) {
-            const text = div.innerText || '';
-            // Pode ter múltiplas referências; cada uma tem "Referência/Fabricante:"
-            const matches = text.match(/Referência\\/Fabricante:\\s*([^\\n]+)/g);
-            if (matches) {
-                for (const m of matches) {
-                    const val = m.replace('Referência/Fabricante:', '').trim();
-                    const parts = val.split('/');
-                    const partNumber = (parts[0] || '').trim();
-                    const empresa = parts.slice(1).join('/').trim();
-                    result.push({partNumber, empresa, raw: val});
+        // Referências ficam em listItems dentro de #rptReferencias ou na área de referências
+        // Cada uma tem "Referência/Fabricante: {partNumber}/{empresa}"
+        const containers = document.querySelectorAll('[id*=rptReferencias], [id*=divReferencias], .ref-item');
+        // Fallback: buscar em toda a aba
+        const searchRoot = containers.length > 0 ? containers : [document.querySelector('#tabReferencias') || document.body];
+        const allText = document.body.innerText || '';
+        const matches = allText.match(/Referência\\/Fabricante:\\s*([^\\n]+)/g);
+        if (matches) {
+            for (const m of matches) {
+                const val = m.replace('Referência/Fabricante:', '').trim();
+                // Ignorar referências N/A (placeholder vazio)
+                if (val === 'N/A' || val === 'N/A/N/A' || val === '/' || val === '') continue;
+                // Split cuidadoso: partNumber é tudo antes do ÚLTIMO /
+                const lastSlash = val.lastIndexOf('/');
+                let partNumber, empresa;
+                if (lastSlash > 0) {
+                    partNumber = val.substring(0, lastSlash).trim();
+                    empresa = val.substring(lastSlash + 1).trim();
+                } else {
+                    partNumber = val;
+                    empresa = '';
                 }
+                result.push({partNumber, empresa, raw: val});
             }
         }
         return result;
@@ -441,6 +469,10 @@ async def verify_sin(page, sin: str, item: dict) -> dict:
             result["warnings"].append(
                 f"Mídias: esperado {expected_docs}, encontrado {actual_media}"
             )
+        elif actual_media > expected_docs and expected_docs > 0:
+            result["warnings"].append(
+                f"Mídias a mais: esperado {expected_docs}, encontrado {actual_media}"
+            )
 
         # ── PDM / Atributos ──
         pdm_data = await _read_pdm_and_attributes(item_page)
@@ -533,10 +565,19 @@ async def run():
 
     # Determinar quais SINs verificar
     from_progress = "--from-progress" in sys.argv
+    skip_verified = "--skip-verified" in sys.argv
+    only_divergent = "--only-divergent" in sys.argv
     cli_sins = [s for s in sys.argv[1:] if not s.startswith("--")]
+
+    # Suporte a --file=lista.txt
+    for arg in sys.argv[1:]:
+        if arg.startswith("--file="):
+            filepath = Path(arg.split("=", 1)[1])
+            cli_sins = [s.strip() for s in filepath.read_text().splitlines() if s.strip()]
 
     # Ler Excel
     wb, items = load_excel()
+    items = validate_documents(items)
     sin_data = {}
     for item in items:
         sin = str(item.get("sin", ""))
@@ -557,6 +598,48 @@ async def run():
             return
     else:
         sins_to_verify = list(sin_data.keys())
+
+    # Carregar relatório existente (para salvar incrementalmente e pular já verificados)
+    report = _load_report()
+    already_verified = {r["sin"] for r in report.get("results", [])}
+
+    if cli_sins:
+        # Quando passa SINs explícitos, remover resultados antigos desses SINs do report
+        sins_set = set(sins_to_verify)
+        report["results"] = [r for r in report.get("results", []) if r["sin"] not in sins_set]
+        already_verified = {r["sin"] for r in report["results"]}
+        # Recontabilizar
+        counts_kept = {}
+        for r in report["results"]:
+            s = r.get("status", "error")
+            counts_kept[s] = counts_kept.get(s, 0) + 1
+        report["counts"] = counts_kept
+        log.info(f"Re-verificando {len(sins_to_verify)} SINs (resultados anteriores removidos)")
+    elif only_divergent:
+        # Re-verificar apenas os divergentes/error do report anterior
+        divergent_sins = [
+            r["sin"] for r in report.get("results", [])
+            if r.get("status") in ("divergente", "error")
+        ]
+        # Remover do report os que vamos re-verificar (serão re-adicionados com novo resultado)
+        report["results"] = [
+            r for r in report.get("results", [])
+            if r.get("status") not in ("divergente", "error")
+        ]
+        # Recontabilizar counts dos que ficaram
+        counts_kept = {}
+        for r in report["results"]:
+            s = r.get("status", "error")
+            counts_kept[s] = counts_kept.get(s, 0) + 1
+        report["counts"] = counts_kept
+        already_verified = {r["sin"] for r in report["results"]}
+
+        sins_to_verify = [s for s in divergent_sins if s in sin_data]
+        log.info(f"--only-divergent: re-verificando {len(sins_to_verify)} SINs divergentes/error")
+    elif skip_verified and already_verified:
+        before = len(sins_to_verify)
+        sins_to_verify = [s for s in sins_to_verify if s not in already_verified]
+        log.info(f"--skip-verified: pulando {before - len(sins_to_verify)} SINs já verificados")
 
     log.info(f"SINs a verificar: {len(sins_to_verify)}")
 
@@ -595,8 +678,10 @@ async def run():
         await asyncio.sleep(60)
 
     # Verificar cada SIN
-    all_results = []
-    counts = {"ok": 0, "ok_com_avisos": 0, "divergente": 0, "error": 0, "not_found": 0}
+    all_results = report.get("results", [])
+    counts = report.get("counts", {})
+    for k in ("ok", "ok_com_avisos", "divergente", "error", "not_found"):
+        counts.setdefault(k, 0)
 
     for i, sin in enumerate(sins_to_verify):
         if sin not in sin_data:
@@ -628,7 +713,23 @@ async def run():
                 log.error(f"  ! SIN {sin}: ERRO ({result['elapsed']:.1f}s)")
 
             # Voltar para worklist
-            await _voltar_worklist(page)
+            try:
+                await _voltar_worklist(page)
+            except Exception as nav_err:
+                log.warning(f"Erro ao voltar para worklist: {nav_err}")
+                try:
+                    for p in context.pages[1:]:
+                        await p.close()
+                    page = await context.new_page()
+                    page.on("dialog", handle_dialog)
+                    await page.goto(
+                        "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+                        wait_until="networkidle",
+                    )
+                    await _voltar_worklist(page)
+                except Exception:
+                    log.error("Recuperação falhou — encerrando")
+                    break
             await asyncio.sleep(3)
 
         except Exception as e:
@@ -656,17 +757,12 @@ async def run():
                     log.error("Recuperação falhou — encerrando")
                     break
 
-    # Salvar relatório
-    report = {
-        "timestamp": datetime.now().isoformat(),
-        "total": len(sins_to_verify),
-        "counts": counts,
-        "results": all_results,
-    }
-    REPORT_FILE.write_text(
-        json.dumps(report, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+        # Salvar incrementalmente a cada SIN
+        report["total"] = len(sins_to_verify) + len(already_verified)
+        report["counts"] = counts
+        report["results"] = all_results
+        _save_report(report)
+
     log.info(f"Relatório salvo em: {REPORT_FILE}")
 
     # Resumo

@@ -348,38 +348,57 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
 
                 // 3. "starts with" match — tree value starts with Excel value or vice versa
                 if (!target) {
-                    target = Array.from(nodes).find(a => {
+                    // Prefer shortest match to avoid "PORCA" matching "PARAFUSO PORCA"
+                    let candidates = Array.from(nodes).filter(a => {
                         const nodeText = a.innerText.trim().toUpperCase();
                         return nodeText.startsWith(upper) || upper.startsWith(nodeText);
                     });
-                    matchType = 'starts-with';
+                    if (candidates.length > 0) {
+                        candidates.sort((a, b) => a.innerText.trim().length - b.innerText.trim().length);
+                        target = candidates[0];
+                        matchType = 'starts-with';
+                    }
                 }
 
                 // 4. "contains all words" match — all words from Excel value appear in tree node
+                //    Prefer the node whose length is closest to the search value (shortest first)
                 if (!target) {
                     const words = upper.split(/\\s+/).filter(w => w.length > 2);
                     if (words.length > 0) {
-                        target = Array.from(nodes).find(a => {
+                        let candidates = Array.from(nodes).filter(a => {
                             const nodeText = a.innerText.trim().toUpperCase();
                             return words.every(w => nodeText.includes(w));
                         });
-                        matchType = 'contains-all-words';
+                        if (candidates.length > 0) {
+                            candidates.sort((a, b) =>
+                                Math.abs(a.innerText.trim().length - upper.length)
+                                - Math.abs(b.innerText.trim().length - upper.length)
+                            );
+                            target = candidates[0];
+                            matchType = 'contains-all-words';
+                        }
                     }
                 }
 
                 // 5. "most words match" — find node with most matching words (minimum 60%)
+                //    On tie, prefer shorter node text (closer to search value)
                 if (!target) {
                     const words = upper.split(/\\s+/).filter(w => w.length > 2);
                     if (words.length > 0) {
                         let bestMatch = null;
                         let bestScore = 0;
+                        let bestLen = Infinity;
                         for (const node of nodes) {
                             const nodeText = node.innerText.trim().toUpperCase();
                             const matchCount = words.filter(w => nodeText.includes(w)).length;
                             const score = matchCount / words.length;
-                            if (score > bestScore && score >= 0.6) {
-                                bestScore = score;
-                                bestMatch = node;
+                            const lenDiff = Math.abs(nodeText.length - upper.length);
+                            if (score > bestScore || (score === bestScore && lenDiff < bestLen)) {
+                                if (score >= 0.6) {
+                                    bestScore = score;
+                                    bestMatch = node;
+                                    bestLen = lenDiff;
+                                }
                             }
                         }
                         if (bestMatch) {

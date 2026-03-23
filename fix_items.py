@@ -4,13 +4,16 @@ Reprocessa SINs específicos usando a mesma lógica do main.py,
 com suporte a itens em APROVACAO-TECNICA (Retornar Etapa → editar → Remeter).
 
 Uso:
-    python fix_items.py                    # corrige todos os SINs listados em SINS_TO_FIX
+    python fix_items.py                    # corrige divergentes do verify_report.json
     python fix_items.py 474284 474291      # corrige SINs específicos via CLI
+    python fix_items.py --manual           # usa a lista hardcoded SINS_TO_FIX
 """
 
 import asyncio
+import json
 import sys
 import time
+from pathlib import Path
 
 from playwright.async_api import async_playwright, Dialog
 
@@ -18,9 +21,11 @@ from config import (
     EXCEL_PATH, PROFILE_DIR, SLOW_MO, HEADLESS,
     VIEWPORT_WIDTH, VIEWPORT_HEIGHT, SELECTORS,
 )
-from excel_handler import load_excel
+from excel_handler import load_excel, validate_documents
 from browser import hide_overlays
 from logger import log
+
+VERIFY_REPORT = Path(__file__).parent / "verify_report.json"
 
 # Page objects
 from pages.classifications import fill_unspsc
@@ -319,15 +324,35 @@ async def run():
     log.info("=" * 50)
 
     # Determinar quais SINs corrigir
-    if len(sys.argv) > 1:
-        sins_to_fix = sys.argv[1:]
-    else:
+    cli_args = [s for s in sys.argv[1:] if not s.startswith("--")]
+    use_manual = "--manual" in sys.argv
+
+    # Suporte a --file=lista.txt
+    for arg in sys.argv[1:]:
+        if arg.startswith("--file="):
+            filepath = Path(arg.split("=", 1)[1])
+            cli_args = [s.strip() for s in filepath.read_text().splitlines() if s.strip()]
+
+    if cli_args:
+        sins_to_fix = cli_args
+    elif use_manual:
         sins_to_fix = SINS_TO_FIX
+    elif VERIFY_REPORT.exists():
+        report = json.loads(VERIFY_REPORT.read_text(encoding="utf-8"))
+        sins_to_fix = [
+            r["sin"] for r in report.get("results", [])
+            if r.get("status") == "divergente"
+        ]
+        log.info(f"Lendo {len(sins_to_fix)} SINs divergentes de {VERIFY_REPORT.name}")
+    else:
+        log.error(f"{VERIFY_REPORT.name} não encontrado. Rode verify_items.py primeiro ou passe SINs via CLI.")
+        return
 
     log.info(f"SINs a corrigir: {sins_to_fix}")
 
     # Ler Excel para pegar dados completos
     wb, items = load_excel()
+    items = validate_documents(items)
     sin_data = {}
     for item in items:
         sin = str(item.get("sin", ""))
