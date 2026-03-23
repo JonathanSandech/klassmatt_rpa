@@ -301,75 +301,6 @@ async def _read_media_count(page) -> int:
     }""")
 
 
-async def _read_pdm_and_attributes(page) -> dict:
-    await page.evaluate("""() => {
-        const tabs = document.querySelectorAll('a');
-        const tab = Array.from(tabs).find(a => a.innerText.includes('Descrições'));
-        if (tab) tab.click();
-    }""")
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(1000)
-
-    found = await page.evaluate("""() => {
-        const links = document.querySelectorAll('a');
-        const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
-        if (link) { link.click(); return true; }
-        return false;
-    }""")
-    if found:
-        await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(1000)
-
-    result = await page.evaluate("""() => {
-        const data = {padronizado: true, attributes: []};
-        if (document.body.innerText.includes('NÃO-PADRONIZADO')) {
-            data.padronizado = false;
-        }
-        const dg = document.querySelector('#dgDadosTecnicos');
-        if (!dg) return data;
-        const rows = dg.querySelectorAll('tr');
-        for (let i = 1; i < rows.length; i++) {
-            const cells = rows[i].querySelectorAll('td');
-            if (cells.length < 2) continue;
-            const label = (cells[0]?.innerText || '').trim();
-            if (!label || label === 'Dados Técnicos') continue;
-            const idx = (i + 1).toString().padStart(2, '0');
-            const hidden = document.querySelector(
-                `input[name$='dgDadosTecnicos$ctl${idx}$hdnDtTexto']`
-            );
-            const naCheckbox = document.querySelector(
-                `input[name$='dgDadosTecnicos$ctl${idx}$ckIsNA']`
-            );
-            const value = hidden ? hidden.value.trim() : '';
-            const isNA = naCheckbox ? naCheckbox.checked : false;
-            data.attributes.push({label, value: value || (isNA ? 'N/A' : ''), isNA});
-        }
-        return data;
-    }""")
-
-    # Voltar da DescricaoV3 se entramos
-    if found and "ITEM_Edita_DescricaoV3" in page.url:
-        await page.evaluate("""() => {
-            const btn = document.querySelector('#butSIN_Voltar');
-            if (btn) btn.click();
-        }""")
-        try:
-            await page.wait_for_load_state("networkidle", timeout=10_000)
-        except Exception:
-            pass
-        await page.wait_for_timeout(1000)
-        await page.evaluate("""() => {
-            const btn = document.querySelector("input[value='Atuar no Item']");
-            if (btn) btn.click();
-        }""")
-        try:
-            await page.wait_for_load_state("networkidle", timeout=10_000)
-        except Exception:
-            pass
-
-    return result
-
-
 # ─── Core: verify + fix em uma passagem ───────────────────────
 
 
@@ -490,57 +421,32 @@ async def verify_and_fix_sin(
                 f"Mídias a mais: esperado {expected_docs}, encontrado {actual_media}"
             )
 
-        # PDM / Atributos
+        # PDM / Atributos — verificação adiada para fase 3 (dentro de DescricaoV3)
+        # Aqui só marcamos que PODE precisar verificar PDM/atributos
+        has_pdm_in_excel = bool(item.get("pdm"))
+        has_attrs_in_excel = bool(item.get("attributes"))
         needs_pdm = False
         needs_attributes = False
-        pdm_data = await _read_pdm_and_attributes(item_page)
-        if item.get("pdm") and not pdm_data.get("padronizado", True):
-            result["diffs"].append({
-                "field": "PDM",
-                "expected": str(item["pdm"]),
-                "actual": "(NÃO-PADRONIZADO)",
-            })
-            needs_pdm = True
 
-        expected_attrs = item.get("attributes", [])
-        actual_attrs = pdm_data.get("attributes", [])
-        for i, attr in enumerate(actual_attrs):
-            if i >= len(expected_attrs):
-                break
-            exp_val = expected_attrs[i]
-            if exp_val is None or (isinstance(exp_val, str) and exp_val.strip() == ""):
-                exp_val = "N/A"
-            else:
-                exp_val = str(exp_val).strip()
-            act_val = attr.get("value", "") or ("N/A" if attr.get("isNA") else "")
-            if exp_val.upper() != act_val.upper():
-                result["diffs"].append({
-                    "field": f"Atributo: {attr.get('label', f'Atrib_{i+1}')}",
-                    "expected": exp_val, "actual": act_val or "(vazio)",
-                })
-                needs_attributes = True
-
-        # Se PDM errado, atributos também precisam ser refeitos
-        if needs_pdm:
-            needs_attributes = True
-
-        # ── Se OK, encerrar ──
-        if not result["diffs"]:
+        # ── Se não há diffs non-PDM E não tem PDM na planilha → OK ──
+        if not result["diffs"] and not has_pdm_in_excel and not has_attrs_in_excel:
             result["status"] = "ok"
             result["elapsed"] = round(time.time() - start, 1)
             return result
 
-        # ── Se verify_only, não corrigir ──
-        if verify_only:
-            result["status"] = "divergente"
+        # ── Se verify_only e não tem PDM para checar, encerrar ──
+        if verify_only and not has_pdm_in_excel and not has_attrs_in_excel:
+            result["status"] = "divergente" if result["diffs"] else "ok"
             result["elapsed"] = round(time.time() - start, 1)
             return result
 
-        # ── FIX: corrigir apenas campos divergentes ──
-        log.info(f"  Divergências: {', '.join(d['field'] for d in result['diffs'])} — corrigindo...")
+        # ── FIX (ou verify_only com PDM para checar): ──
+        has_non_pdm_diffs = bool(result["diffs"])
+        if has_non_pdm_diffs and not verify_only:
+            log.info(f"  Divergências: {', '.join(d['field'] for d in result['diffs'])} — corrigindo...")
 
         # Checar se precisa retornar etapa
-        if item_status == "APROVACAO-TECNICA":
+        if item_status == "APROVACAO-TECNICA" and not verify_only:
             # Voltar para SIN_Item_Resultante para retornar etapa
             await item_page.evaluate("""() => {
                 const links = document.querySelectorAll('a');
@@ -566,35 +472,36 @@ async def verify_and_fix_sin(
             await item_page.wait_for_timeout(2000)
             await hide_overlays(item_page)
 
-        # Corrigir cada campo divergente
+        # Corrigir cada campo divergente (non-PDM)
         try:
-            if needs_unspsc and item.get("unspsc"):
-                await fill_unspsc(item_page, str(item["unspsc"]))
-                result["fixed"].append("UNSPSC")
-                log.info(f"  ✓ UNSPSC corrigido: {item['unspsc']}")
+            if not verify_only:
+                if needs_unspsc and item.get("unspsc"):
+                    await fill_unspsc(item_page, str(item["unspsc"]))
+                    result["fixed"].append("UNSPSC")
+                    log.info(f"  ✓ UNSPSC corrigido: {item['unspsc']}")
 
-            if needs_ncm and item.get("ncm"):
-                await fill_ncm(item_page, str(item["ncm"]))
-                result["fixed"].append("NCM")
-                log.info(f"  ✓ NCM corrigido: {item['ncm']}")
+                if needs_ncm and item.get("ncm"):
+                    await fill_ncm(item_page, str(item["ncm"]))
+                    result["fixed"].append("NCM")
+                    log.info(f"  ✓ NCM corrigido: {item['ncm']}")
 
-            if needs_reference and item.get("empresa") and item.get("part_number"):
-                await fill_reference(item_page, str(item["empresa"]), str(item["part_number"]))
-                result["fixed"].append("Referência")
-                log.info(f"  ✓ Referência corrigida: {item['empresa']} / {item['part_number']}")
+                if needs_reference and item.get("empresa") and item.get("part_number"):
+                    await fill_reference(item_page, str(item["empresa"]), str(item["part_number"]))
+                    result["fixed"].append("Referência")
+                    log.info(f"  ✓ Referência corrigida: {item['empresa']} / {item['part_number']}")
 
-            if needs_relationship and item.get("codigo_60"):
-                await fill_relationship(item_page, str(item["codigo_60"]))
-                result["fixed"].append("Relacionamento")
-                log.info(f"  ✓ Relacionamento corrigido: {item['codigo_60']}")
+                if needs_relationship and item.get("codigo_60"):
+                    await fill_relationship(item_page, str(item["codigo_60"]))
+                    result["fixed"].append("Relacionamento")
+                    log.info(f"  ✓ Relacionamento corrigido: {item['codigo_60']}")
 
-            if needs_media and doc_files:
-                await upload_documents(item_page, doc_files)
-                result["fixed"].append("Mídias")
-                log.info(f"  ✓ Mídias: {len(doc_files)} doc(s)")
+                if needs_media and doc_files:
+                    await upload_documents(item_page, doc_files)
+                    result["fixed"].append("Mídias")
+                    log.info(f"  ✓ Mídias: {len(doc_files)} doc(s)")
 
             # Salvar geral para limpar dirty state antes de navegar para PDM/Descrições
-            if (needs_reference or needs_relationship) and (needs_pdm or needs_attributes):
+            if (needs_reference or needs_relationship) and (has_pdm_in_excel or has_attrs_in_excel):
                 log.debug("  Salvando item para limpar dirty state...")
                 for save_attempt in range(3):
                     try:
@@ -654,27 +561,112 @@ async def verify_and_fix_sin(
                         }""")
                         await item_page.wait_for_timeout(2000)
 
-            # Validação SAP — só se NÃO vai mudar PDM (PDM reseta a descrição)
-            # E só se NÃO mexeu em referências (validate_sap abre ref edit → dirty state)
-            if needs_attributes and not needs_pdm and not needs_reference:
-                await validate_sap_description(item_page)
+            # ── FASE 3: Verify + Fix PDM/Atributos (entrada única em DescricaoV3) ──
+            if has_pdm_in_excel or has_attrs_in_excel:
+                # Navegar para DescricaoV3
+                await item_page.evaluate("""() => {
+                    window.confirm = () => true;
+                    window.alert = () => {};
+                    const tabs = document.querySelectorAll('a');
+                    const tab = Array.from(tabs).find(a => a.innerText.includes('Descrições'));
+                    if (tab) tab.click();
+                }""")
+                await item_page.wait_for_load_state("networkidle")
+                await item_page.wait_for_timeout(1000)
 
-            pdm_ok = True
-            if needs_pdm and item.get("pdm"):
-                pdm_ok = await change_pdm(item_page, str(item["pdm"]))
-                if pdm_ok:
-                    result["fixed"].append("PDM")
-                    log.info(f"  ✓ PDM corrigido: {item['pdm']}")
-                else:
-                    result["warnings"].append("PDM falhou")
-                    log.warning(f"  ✗ PDM NÃO corrigido: {item['pdm']}")
+                if "ITEM_Edita_DescricaoV3" not in item_page.url:
+                    await item_page.evaluate("""() => {
+                        const links = document.querySelectorAll('a');
+                        const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
+                        if (link) link.click();
+                    }""")
+                    await item_page.wait_for_load_state("networkidle")
+                    await item_page.wait_for_timeout(1000)
 
-            if needs_attributes:
-                if needs_pdm and not pdm_ok:
-                    # Sem PDM correto, atributos seriam preenchidos na tabela errada
-                    result["warnings"].append("Atributos pulados (PDM não foi aplicado)")
-                    log.warning("  ✗ Atributos pulados — PDM não foi aplicado")
-                else:
+                # Ler PDM e atributos in-place
+                pdm_data = await item_page.evaluate("""() => {
+                    const data = {padronizado: true, attributes: []};
+                    if (document.body.innerText.includes('NÃO-PADRONIZADO'))
+                        data.padronizado = false;
+                    const dg = document.querySelector('#dgDadosTecnicos');
+                    if (!dg) return data;
+                    const rows = dg.querySelectorAll('tr');
+                    for (let i = 1; i < rows.length; i++) {
+                        const cells = rows[i].querySelectorAll('td');
+                        if (cells.length < 2) continue;
+                        // Label pode estar em cells[0] ou cells[1] (cells[0] pode ser ícone LED)
+                        let label = (cells[0]?.innerText || '').trim();
+                        if (!label || label.length < 2)
+                            label = (cells[1]?.innerText || '').trim();
+                        if (!label || label === 'Dados Técnicos') continue;
+                        const idx = (i + 1).toString().padStart(2, '0');
+                        const hidden = document.querySelector(
+                            `input[name$='dgDadosTecnicos$ctl${idx}$hdnDtTexto']`
+                        );
+                        const naCheckbox = document.querySelector(
+                            `input[name$='dgDadosTecnicos$ctl${idx}$ckIsNA']`
+                        );
+                        const value = hidden ? hidden.value.trim() : '';
+                        const isNA = naCheckbox ? naCheckbox.checked : false;
+                        data.attributes.push({label, value: value || (isNA ? 'N/A' : ''), isNA});
+                    }
+                    return data;
+                }""")
+
+                # Computar diffs de PDM
+                if has_pdm_in_excel and not pdm_data.get("padronizado", True):
+                    result["diffs"].append({
+                        "field": "PDM",
+                        "expected": str(item["pdm"]),
+                        "actual": "(NÃO-PADRONIZADO)",
+                    })
+                    needs_pdm = True
+                    needs_attributes = True  # PDM errado → atributos precisam ser refeitos
+
+                # Computar diffs de atributos
+                if not needs_pdm:
+                    expected_attrs = item.get("attributes", [])
+                    actual_attrs = pdm_data.get("attributes", [])
+                    for i, attr in enumerate(actual_attrs):
+                        if i >= len(expected_attrs):
+                            break
+                        exp_val = expected_attrs[i]
+                        if exp_val is None or (isinstance(exp_val, str) and exp_val.strip() == ""):
+                            exp_val = "N/A"
+                        else:
+                            exp_val = str(exp_val).strip()
+                        act_val = attr.get("value", "") or ("N/A" if attr.get("isNA") else "")
+                        if exp_val.upper() != act_val.upper():
+                            result["diffs"].append({
+                                "field": f"Atributo: {attr.get('label', f'Atrib_{i+1}')}",
+                                "expected": exp_val, "actual": act_val or "(vazio)",
+                            })
+                            needs_attributes = True
+
+                # Log diffs de PDM/atributos
+                if needs_pdm or needs_attributes:
+                    pdm_diffs = [d["field"] for d in result["diffs"] if "PDM" in d["field"] or "Atributo" in d["field"]]
+                    if not has_non_pdm_diffs:
+                        log.info(f"  Divergências: {', '.join(pdm_diffs)} — {'corrigindo...' if not verify_only else 'verify only'}")
+                    else:
+                        log.info(f"  + PDM/Atributos: {', '.join(pdm_diffs)}")
+
+                # Se verify_only, não corrigir
+                if verify_only:
+                    pass  # diffs já registrados, status final será computado abaixo
+                elif needs_pdm and item.get("pdm"):
+                    # Já estamos em DescricaoV3 — change_pdm detecta e pula navegação
+                    pdm_ok = await change_pdm(item_page, str(item["pdm"]))
+                    if pdm_ok:
+                        result["fixed"].append("PDM")
+                        log.info(f"  ✓ PDM corrigido: {item['pdm']}")
+                    else:
+                        result["warnings"].append("PDM falhou")
+                        log.warning(f"  ✗ PDM NÃO corrigido: {item['pdm']}")
+                        needs_attributes = False  # Sem PDM, não preencher atributos
+
+                if needs_attributes and not verify_only:
+                    # Já estamos em DescricaoV3 — fill_attributes detecta e pula navegação
                     attr_ok = await fill_attributes(item_page, item.get("attributes", []))
                     if attr_ok:
                         result["fixed"].append("Atributos")
@@ -697,13 +689,17 @@ async def verify_and_fix_sin(
                     except Exception:
                         pass
 
-            # Status: corrigido só se todos os diffs foram fixados
-            unfixed = [d["field"] for d in result["diffs"] if d["field"] not in result["fixed"]
-                       and not any(d["field"] in f for f in result["fixed"])]
-            if result["warnings"]:
+            # Status final
+            if verify_only:
+                result["status"] = "divergente" if result["diffs"] else "ok"
+            elif result["warnings"]:
                 result["status"] = "parcial"
-            else:
+            elif result["fixed"]:
                 result["status"] = "corrigido"
+            elif not result["diffs"]:
+                result["status"] = "ok"
+            else:
+                result["status"] = "divergente"
 
         except Exception as fix_err:
             log.error(f"  Erro ao corrigir: {fix_err}")
