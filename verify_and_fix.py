@@ -750,6 +750,11 @@ async def verify_and_fix_sin(
                         result["warnings"].append("Atributos falhou")
                         log.warning("  ✗ Atributos NÃO corrigidos")
 
+                # Delay após salvar atributos para evitar rate limiting do Klassmatt
+                # (mesmo padrão do main.py linha 235)
+                if not verify_only and (needs_pdm or needs_attributes):
+                    await item_page.wait_for_timeout(10_000)
+
             # Remeter
             if REMETER_APOS_FIX:
                 remeter = item_page.locator("input[value='Remeter Modec']")
