@@ -305,6 +305,9 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         await popup_page.wait_for_timeout(500)
 
         first_letter = value[0].upper()
+        # Valores que começam com dígito ficam sob o nó "[0-9]" na árvore
+        if first_letter.isdigit():
+            first_letter = "[0-9]"
 
         # Passo 1: Clicar na letra do alfabeto para expandir a sub-árvore
         # As letras são links com __doPostBack que causam navegação/postback
