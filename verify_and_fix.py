@@ -75,6 +75,61 @@ async def handle_dialog(dialog: Dialog):
     await dialog.accept()
 
 
+# ─── Browser restart (mesmo padrão do main.py) ───────────────
+
+
+async def _restart_browser(pw, context):
+    """Fecha browser e reabre. Retorna (pw, context, page)."""
+    log.warning("Fechando browser e reabrindo...")
+    try:
+        await context.close()
+    except Exception:
+        pass
+    try:
+        await pw.stop()
+    except Exception:
+        pass
+    await asyncio.sleep(5)
+
+    new_pw = await async_playwright().start()
+    new_context = await new_pw.chromium.launch_persistent_context(
+        user_data_dir=PROFILE_DIR,
+        headless=HEADLESS,
+        slow_mo=SLOW_MO,
+        viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
+        args=[f"--window-size={VIEWPORT_WIDTH},{VIEWPORT_HEIGHT}"],
+    )
+    new_context.set_default_timeout(30_000)
+    new_context.set_default_navigation_timeout(60_000)
+    new_page = new_context.pages[0] if new_context.pages else await new_context.new_page()
+    new_page.on("dialog", handle_dialog)
+
+    await new_page.goto(
+        "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+        wait_until="networkidle",
+    )
+    sessao_ok = await verificar_sessao(new_page)
+    if not sessao_ok:
+        log.warning("Sessão expirada após reabrir — aguardando 60s para re-login manual")
+        await asyncio.sleep(60)
+        await new_page.reload(wait_until="networkidle")
+
+    await _navigate_to_worklist(new_page)
+    # Selecionar "Todas as Solicitações"
+    try:
+        await new_page.select_option(
+            "select:has(option[value='SOMENTE_REC_ACAO'])",
+            label="Todas as Solicitações",
+        )
+        await new_page.evaluate("() => { pesquisar(0, ''); }")
+        await new_page.wait_for_load_state("networkidle")
+        await new_page.wait_for_timeout(3000)
+    except Exception:
+        pass
+
+    return new_pw, new_context, new_page
+
+
 # ─── Navigation helpers ───────────────────────────────────────
 
 
@@ -894,20 +949,15 @@ async def run():
             # Voltar para worklist
             try:
                 await _voltar_worklist(page)
+                # Checar se caiu em página de erro após voltar
+                if await _check_page_error(page):
+                    raise Exception("Página de erro após voltar para worklist")
             except Exception as nav_err:
-                log.warning(f"Erro ao voltar para worklist: {nav_err}")
+                log.warning(f"Erro ao voltar para worklist: {nav_err} — reiniciando browser")
                 try:
-                    for p in context.pages[1:]:
-                        await p.close()
-                    page = await context.new_page()
-                    page.on("dialog", handle_dialog)
-                    await page.goto(
-                        "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
-                        wait_until="networkidle",
-                    )
-                    await _voltar_worklist(page)
+                    pw, context, page = await _restart_browser(pw, context)
                 except Exception:
-                    log.error("Recuperação falhou — encerrando")
+                    log.error("Restart browser falhou — encerrando")
                     break
             await asyncio.sleep(5)
 
@@ -920,21 +970,10 @@ async def run():
                 "fixed": [], "warnings": [], "elapsed": 0,
             })
             try:
-                await _voltar_worklist(page)
+                pw, context, page = await _restart_browser(pw, context)
             except Exception:
-                try:
-                    for p_tab in context.pages[1:]:
-                        await p_tab.close()
-                    page = await context.new_page()
-                    page.on("dialog", handle_dialog)
-                    await page.goto(
-                        "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
-                        wait_until="networkidle",
-                    )
-                    await _voltar_worklist(page)
-                except Exception:
-                    log.error("Recuperação falhou — encerrando")
-                    break
+                log.error("Restart browser falhou — encerrando")
+                break
 
         # Salvar incrementalmente
         report["total"] = len(sins_to_process)
