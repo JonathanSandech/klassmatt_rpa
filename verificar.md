@@ -75,6 +75,50 @@
 
 ---
 
+## Resultados sessão 2026-03-20 (580 itens, 2 VMs)
+
+### Números finais
+- **412 OK** | 70 skipped | 43 error | 580 total
+- Throughput: ~24 itens/hora (~2.4 min/item)
+- Sessão estável por 10h sem expiração
+
+### Problemas confirmados em itens OK (154 de 412)
+
+#### NCM rejeitado pelo Klassmatt — 18 SINs (CRÍTICO)
+- NCM preenchido pelo bot mas Klassmatt rejeitou → **campo ficou VAZIO**
+- NCMs afetados: `84799090`, `73181500`, `84841000`
+- Causa: NCM sem ponto era formatado mas Klassmatt ainda rejeitava (formato ou código inválido no cadastro fiscal)
+- **Ação**: Corrigir manualmente ou via fix_ncm.py
+
+#### Atributos/dados técnicos incompletos — 62 SINs (MÉDIO)
+- Alert do Klassmatt: "É necessário preencher/verificar os dados técnicos destacados!"
+- Bot aceitou o dialog e continuou → item marcado OK com atributos faltantes
+- Causa: Valor do Excel não existe na árvore taxonomica (ex: "CHAVE FLUXO", "PORCA SEXTAVADA", "BOMBA AUXILIAR OLEO LUBRIFICANTE")
+- **Ação**: Verificar se atributos são obrigatórios ou opcionais no fluxo
+
+#### Sem Referência — 74 SINs (MÉDIO)
+- Coluna "Empresa" vazia na planilha → step de Referência pulado silenciosamente
+- `if item.get("empresa")` em main.py pula sem logar warning
+- **Ação**: Preencher empresa na planilha ou confirmar que referência não é obrigatória
+
+### Erros principais (43 total)
+- **Adicionar Mídia timeout**: 34 erros (79%) — link não renderiza após uploads consecutivos. Itens com 5+ docs mais afetados. Retry 0% eficaz.
+- **Execution context destroyed**: 5 erros permanentes (97% recuperado via retry)
+- **Página de erro Klassmatt**: 3 erros — degradação noturna do servidor
+- **Outros**: 1 timeout Relacionamento
+
+### Gargalo de performance
+- **UNSPSC**: ~45-50% do tempo total por item (popup de busca/seleção)
+- Otimizar este step dobraria o throughput
+
+### Lições para próxima wave
+1. Desabilitar QuickEdit Mode no terminal Windows (pausa ao clicar na janela)
+2. Klassmatt degrada após ~19h — preferir horário comercial
+3. Retry de "Adicionar Mídia" é inútil — implementar fail-fast
+4. Validar planilha antes: empresa vazia = sem referência
+
+---
+
 ## Comando para verificar progresso durante execução
 
 ```powershell
