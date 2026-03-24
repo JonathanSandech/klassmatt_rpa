@@ -86,6 +86,11 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
         else:
             value_str = str(value).strip()
 
+        # Tratar placeholders como N/A (ex: '-', '--', '.', etc.)
+        if value_str in ("-", "--", ".", "...", "*", "?"):
+            log.debug(f"Atributo {i + 1}: valor '{value_str}' é placeholder — tratando como N/A")
+            value_str = "N/A"
+
         # Verificar se o atributo já está preenchido
         current_val = await page.evaluate(
             f"""() => {{

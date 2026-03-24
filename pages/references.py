@@ -102,6 +102,51 @@ async def _select_autocomplete(page: Page, empresa: str) -> bool:
     return False
 
 
+async def _close_fabricante_tab_and_cancel_form(page: Page) -> None:
+    """Fecha aba de cadastro de fabricante (se aberta) e cancela o form de edição.
+
+    Quando o fabricante não existe, o confirm dialog "Deseja cadastra-lo?" abre
+    FabricanteFornecManu.aspx numa nova aba. A referência já é salva nesse ponto,
+    mas o form de edição continua aberto (dirty state). Precisamos:
+    1. Fechar a aba do fabricante (se existir)
+    2. Clicar Cancelar no form de edição para limpar o dirty state
+    """
+    # 1. Fechar abas auxiliares de fabricante (FabricanteFornecManu.aspx)
+    try:
+        all_pages = page.context.pages
+        for p in all_pages:
+            if p != page and "FabricanteFornecManu" in p.url:
+                log.debug(f"Fechando aba de cadastro de fabricante: {p.url}")
+                try:
+                    await p.close()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    await page.wait_for_timeout(500)
+
+    # 2. Se o form de edição ainda está aberto, clicar Cancelar
+    #    (a referência já foi salva — Cancelar apenas fecha o form)
+    try:
+        cancelar = page.locator("#btnCancelar").first
+        if await cancelar.is_visible(timeout=1_500):
+            log.debug("Form referência ainda aberto após save — clicando Cancelar para limpar dirty state")
+            await page.evaluate("() => { const b = document.querySelector('#btnCancelar'); if (b) b.click(); }")
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
+    except Exception:
+        pass
+
+    # 3. Garantir que saímos do dirty state recarregando a aba
+    try:
+        await safe_click(page, SELECTORS["tab_referencias"])
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(1000)
+    except Exception:
+        pass
+
+
 async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     """Preenche referência (empresa + part number).
 
@@ -191,29 +236,11 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
             pass
         return False
 
-    # Após salvar com fabricante novo, o form pode continuar aberto (dirty state).
-    # Tentar salvar novamente se o botão salvar ainda estiver visível.
-    for retry in range(2):
-        try:
-            salvar_still = page.locator(SELECTORS["ref_salvar_btn"]).first
-            if await salvar_still.is_visible(timeout=1_500):
-                log.debug(f"Form referência ainda aberto (retry {retry + 1}) — salvando novamente")
-                await page.evaluate("() => { const b = document.querySelector('#btnSalvar'); if (b) b.click(); }")
-                await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(1000)
-            else:
-                break
-        except Exception:
-            break
-
-    # Garantir que o form não está em dirty state antes de sair da aba.
-    # Recarregar a aba de referências para limpar qualquer estado pendente.
-    try:
-        await safe_click(page, SELECTORS["tab_referencias"])
-        await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(1000)
-    except Exception:
-        pass
+    # Após salvar com fabricante novo, o Klassmatt abre uma nova aba
+    # (FabricanteFornecManu.aspx) para cadastrar o fabricante.
+    # A referência JÁ é salva, mas o form de edição fica aberto (dirty state).
+    # Precisamos: 1) fechar a aba do fabricante, 2) clicar Cancelar no form.
+    await _close_fabricante_tab_and_cancel_form(page)
 
     log.info("Referência salva com sucesso")
     return True
