@@ -78,9 +78,27 @@ async def handle_dialog(dialog: Dialog):
 # ─── Navigation helpers ───────────────────────────────────────
 
 
+async def _check_page_error(page) -> bool:
+    """Verifica se a página atual é a tela de erro do Klassmatt."""
+    try:
+        text = await page.evaluate("() => document.body.innerText.substring(0, 500)")
+        return "exce" in text.lower() or "ACESSO" in text
+    except Exception:
+        return False
+
+
 async def _navigate_to_worklist(page):
     """Garante que estamos na worklist com pesquisar() disponível."""
     for attempt in range(3):
+        # Detectar página de erro do Klassmatt
+        if await _check_page_error(page):
+            log.warning("Página de erro detectada — voltando para Principal")
+            await page.goto(
+                "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+                wait_until="networkidle",
+            )
+            await page.wait_for_timeout(3000)
+
         ready = await page.evaluate("() => typeof pesquisar === 'function'")
         if ready:
             return
