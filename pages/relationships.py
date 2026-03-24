@@ -70,34 +70,21 @@ async def _add_relationship(page: Page, codigo_60: str) -> None:
 
 async def _fill_fields(page: Page, codigo_60: str) -> None:
     """Preenche os campos do formulário de relacionamento."""
-    # Tipo: CÓDIGO ANTIGO (select2 dropdown — usar JS para abrir + selecionar)
-    await page.evaluate(f"""() => {{
-        const input = document.querySelector("input[name*='tabRelaciona'][id='txtTipo']");
-        if (input) {{ input.click(); input.value = ''; }}
-    }}""")
+    from browser import hide_overlays
+    await hide_overlays(page)
+
+    # Tipo: CÓDIGO ANTIGO
+    await safe_click(page, SELECTORS["rel_tipo_input"])
     await page.wait_for_timeout(500)
-    await page.evaluate(f"""() => {{
-        const options = document.querySelectorAll('a');
-        const opt = Array.from(options).find(a => a.innerText.includes('{RELATIONSHIP_TYPE}'));
-        if (opt) opt.click();
-    }}""")
-    await page.wait_for_timeout(500)
+    await safe_click(page, f"a:has-text('{RELATIONSHIP_TYPE}')")
 
     # Código
     await safe_fill(page, SELECTORS["rel_codigo_input"], str(codigo_60))
 
     # Status: ATIVO ERP
-    await page.evaluate(f"""() => {{
-        const input = document.querySelector("input[name*='tabRelaciona'][id='txtStatus']");
-        if (input) {{ input.click(); input.value = ''; }}
-    }}""")
+    await safe_click(page, SELECTORS["rel_status_input"])
     await page.wait_for_timeout(500)
-    await page.evaluate(f"""() => {{
-        const options = document.querySelectorAll('a');
-        const opt = Array.from(options).find(a => a.innerText.includes('{RELATIONSHIP_STATUS}'));
-        if (opt) opt.click();
-    }}""")
-    await page.wait_for_timeout(500)
+    await safe_click(page, f"a:has-text('{RELATIONSHIP_STATUS}')")
 
     # Comentário: ZBRA
     await safe_fill(page, SELECTORS["rel_comentario_input"], RELATIONSHIP_COMMENT)
