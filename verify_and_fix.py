@@ -28,7 +28,7 @@ from config import (
     RELATIONSHIP_TYPE,
 )
 from excel_handler import load_excel, validate_documents
-from browser import hide_overlays
+from browser import hide_overlays, verificar_sessao
 from logger import log
 
 # Page objects (fix)
@@ -831,6 +831,21 @@ async def run():
             log.warning(f"SIN {sin} não encontrado na planilha — pulando")
             counts["not_found"] = counts.get("not_found", 0) + 1
             continue
+
+        # Verificar sessão a cada 20 itens
+        if i % 20 == 0:
+            sessao_ok = await verificar_sessao(page)
+            if not sessao_ok:
+                log.warning("Sessão expirada — aguardando 60s para login manual...")
+                await asyncio.sleep(60)
+                try:
+                    await page.reload(wait_until="networkidle")
+                    sessao_ok = await verificar_sessao(page)
+                except Exception:
+                    sessao_ok = False
+                if not sessao_ok:
+                    log.error("Sessão não recuperada após 60s — encerrando")
+                    break
 
         log.info(f"[{i+1}/{len(sins_to_process)}] SIN {sin}...")
 
