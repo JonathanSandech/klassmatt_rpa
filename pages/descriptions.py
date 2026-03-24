@@ -251,17 +251,32 @@ async def change_pdm(page: Page, pdm: str) -> bool:
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
 
-    # Clicar em "PARTES E PECAS" via JS
+    # Clicar na categoria do resultado da pesquisa (nome válido do PDM)
+    # Cada PDM tem sua categoria (17100=PARTES E PECAS, 18101=KIT, etc)
+    # Clicar no primeiro link da tabela de resultados que é o nome válido
     found_cat = await page.evaluate(
         f"""() => {{
+            // Primeiro: tentar encontrar link com o número do PDM (ex: "17100")
             const links = document.querySelectorAll('a');
-            const link = Array.from(links).find(a => a.innerText.includes('{PDM_CATEGORY}'));
-            if (link) {{ link.click(); return true; }}
-            return false;
+            const pdmLink = Array.from(links).find(a => a.innerText.trim() === '{pdm}');
+            if (pdmLink) {{ pdmLink.click(); return pdmLink.innerText.trim(); }}
+            // Fallback: clicar no segundo link da primeira row de dados (nome válido)
+            const table = document.querySelector('table[id*="dgPadroes"]');
+            if (table) {{
+                const rows = table.querySelectorAll('tr');
+                for (const row of rows) {{
+                    const rowLinks = row.querySelectorAll('a');
+                    if (rowLinks.length >= 2) {{
+                        rowLinks[1].click();
+                        return rowLinks[1].innerText.trim();
+                    }}
+                }}
+            }}
+            return null;
         }}"""
     )
     if not found_cat:
-        log.warning(f"Categoria '{PDM_CATEGORY}' não encontrada para PDM {pdm}")
+        log.warning(f"Categoria não encontrada para PDM {pdm}")
         return False
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
@@ -295,5 +310,5 @@ async def change_pdm(page: Page, pdm: str) -> bool:
     # O Finalizar será feito pelo fill_attributes() após preencher os atributos,
     # o que persiste PDM + atributos juntos.
 
-    log.info(f"PDM alterado para: {pdm} / {PDM_CATEGORY}")
+    log.info(f"PDM alterado para: {pdm} / {found_cat}")
     return True
