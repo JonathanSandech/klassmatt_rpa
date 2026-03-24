@@ -129,8 +129,8 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
             log.info(f"Referência já existe com part number correto ({part_number}) — pulando")
             return True
         else:
-            log.info(f"Referência existente ('{raw_ref}') difere — adicionando nova")
-            use_edit = False
+            log.info(f"Referência existente ('{raw_ref}') difere — editando existente")
+            use_edit = True
 
     # Abrir formulário: EDIT (Imagebutton22) ou ADD (iButAddRef)
     # Usar JS evaluate para evitar form intercept de pointer events
