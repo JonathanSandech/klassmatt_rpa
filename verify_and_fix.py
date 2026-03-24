@@ -25,7 +25,7 @@ from playwright.async_api import async_playwright, Dialog
 from config import (
     EXCEL_PATH, PROFILE_DIR, SLOW_MO, HEADLESS,
     VIEWPORT_WIDTH, VIEWPORT_HEIGHT, PROGRESS_FILE,
-    RELATIONSHIP_TYPE,
+    RELATIONSHIP_TYPE, MAX_RETRIES, RETRY_DELAY_MS,
 )
 from excel_handler import load_excel, validate_documents
 from browser import hide_overlays, verificar_sessao
@@ -920,60 +920,80 @@ async def run():
                     log.error("Sessão não recuperada após 60s — encerrando")
                     break
 
-        log.info(f"[{i+1}/{len(sins_to_process)}] SIN {sin}...")
+        # Retry com backoff (mesmo padrão do main.py process_item_with_retry)
+        for attempt in range(1, MAX_RETRIES + 1):
+            log.info(f"[{i+1}/{len(sins_to_process)}] SIN {sin}{'  (tentativa '+str(attempt)+')' if attempt > 1 else ''}...")
 
-        try:
-            result = await verify_and_fix_sin(
-                page, sin, sin_data[sin], verify_only=verify_only,
-            )
-            all_results.append(result)
-            counts[result["status"]] = counts.get(result["status"], 0) + 1
-
-            # Log
-            st = result["status"]
-            elapsed = result["elapsed"]
-            if st == "ok":
-                log.info(f"  ✓ OK ({elapsed:.1f}s)")
-            elif st == "corrigido":
-                fixed_str = ", ".join(result["fixed"])
-                log.info(f"  ✓ CORRIGIDO: {fixed_str} ({elapsed:.1f}s)")
-            elif st == "divergente":
-                diffs_str = ", ".join(d["field"] for d in result["diffs"])
-                log.warning(f"  ✗ DIVERGENTE: {diffs_str} ({elapsed:.1f}s)")
-            elif st == "fix_failed":
-                diffs_str = ", ".join(d["field"] for d in result["diffs"])
-                log.error(f"  ✗ FIX FALHOU: {diffs_str} ({elapsed:.1f}s)")
-            else:
-                log.error(f"  ! ERRO ({elapsed:.1f}s)")
-
-            # Voltar para worklist
             try:
-                await _voltar_worklist(page)
-                # Checar se caiu em página de erro após voltar
-                if await _check_page_error(page):
-                    raise Exception("Página de erro após voltar para worklist")
-            except Exception as nav_err:
-                log.warning(f"Erro ao voltar para worklist: {nav_err} — reiniciando browser")
+                result = await verify_and_fix_sin(
+                    page, sin, sin_data[sin], verify_only=verify_only,
+                )
+
+                # Voltar para worklist ANTES de validar resultado
                 try:
+                    await _voltar_worklist(page)
+                    if await _check_page_error(page):
+                        raise Exception("Página de erro após voltar para worklist")
+                except Exception as nav_err:
+                    log.warning(f"Erro ao voltar para worklist: {nav_err} — reiniciando browser")
                     pw, context, page = await _restart_browser(pw, context)
-                except Exception:
-                    log.error("Restart browser falhou — encerrando")
-                    break
-            await asyncio.sleep(5)
+                    # Se reportou "corrigido" mas deu erro de página, não confiar
+                    if result["status"] == "corrigido":
+                        log.warning(f"  Status 'corrigido' não confiável (erro de página) — retentando")
+                        if attempt < MAX_RETRIES:
+                            await asyncio.sleep((RETRY_DELAY_MS / 1000) * attempt)
+                            continue
+                        else:
+                            result["status"] = "error"
+                            result["warnings"].append("Erro de página após Finalizar — PDM pode não ter salvo")
 
-        except Exception as e:
-            log.error(f"Erro fatal SIN {sin}: {e}")
-            counts["error"] = counts.get("error", 0) + 1
-            all_results.append({
-                "sin": sin, "status": "error",
-                "diffs": [{"field": "ERRO FATAL", "expected": "", "actual": str(e)}],
-                "fixed": [], "warnings": [], "elapsed": 0,
-            })
-            try:
-                pw, context, page = await _restart_browser(pw, context)
-            except Exception:
-                log.error("Restart browser falhou — encerrando")
-                break
+                # Log resultado
+                st = result["status"]
+                elapsed = result["elapsed"]
+                if st == "ok":
+                    log.info(f"  ✓ OK ({elapsed:.1f}s)")
+                elif st == "corrigido":
+                    fixed_str = ", ".join(result["fixed"])
+                    log.info(f"  ✓ CORRIGIDO: {fixed_str} ({elapsed:.1f}s)")
+                elif st == "divergente":
+                    diffs_str = ", ".join(d["field"] for d in result["diffs"])
+                    log.warning(f"  ✗ DIVERGENTE: {diffs_str} ({elapsed:.1f}s)")
+                elif st == "fix_failed":
+                    diffs_str = ", ".join(d["field"] for d in result["diffs"])
+                    log.error(f"  ✗ FIX FALHOU: {diffs_str} ({elapsed:.1f}s)")
+                else:
+                    log.error(f"  ! ERRO ({elapsed:.1f}s)")
+
+                all_results.append(result)
+                counts[result["status"]] = counts.get(result["status"], 0) + 1
+                await asyncio.sleep(5)
+                break  # Sucesso — sair do retry loop
+
+            except Exception as e:
+                log.error(f"Erro SIN {sin} (tentativa {attempt}/{MAX_RETRIES}): {e}")
+
+                if attempt < MAX_RETRIES:
+                    delay = (RETRY_DELAY_MS / 1000) * attempt
+                    log.info(f"  Aguardando {delay:.0f}s antes da próxima tentativa...")
+                    await asyncio.sleep(delay)
+                    try:
+                        pw, context, page = await _restart_browser(pw, context)
+                    except Exception:
+                        log.error("Restart browser falhou — encerrando")
+                        break
+                else:
+                    # Esgotou tentativas
+                    counts["error"] = counts.get("error", 0) + 1
+                    all_results.append({
+                        "sin": sin, "status": "error",
+                        "diffs": [{"field": "ERRO FATAL", "expected": "", "actual": str(e)}],
+                        "fixed": [], "warnings": [], "elapsed": 0,
+                    })
+                    try:
+                        pw, context, page = await _restart_browser(pw, context)
+                    except Exception:
+                        log.error("Restart browser falhou — encerrando")
+                        break
 
         # Salvar incrementalmente
         report["total"] = len(sins_to_process)
