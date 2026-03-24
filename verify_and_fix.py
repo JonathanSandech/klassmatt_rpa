@@ -26,6 +26,8 @@ from config import (
     EXCEL_PATH, PROFILE_DIR, SLOW_MO, HEADLESS,
     VIEWPORT_WIDTH, VIEWPORT_HEIGHT, PROGRESS_FILE,
     RELATIONSHIP_TYPE, MAX_RETRIES, RETRY_DELAY_MS,
+    KLASSMATT_HOME, ACTION_TIMEOUT, NAVIGATION_TIMEOUT,
+    SELECTORS,
 )
 from excel_handler import load_excel, validate_documents
 from browser import hide_overlays, verificar_sessao
@@ -99,13 +101,13 @@ async def _restart_browser(pw, context):
         viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
         args=[f"--window-size={VIEWPORT_WIDTH},{VIEWPORT_HEIGHT}"],
     )
-    new_context.set_default_timeout(30_000)
-    new_context.set_default_navigation_timeout(60_000)
+    new_context.set_default_timeout(ACTION_TIMEOUT)
+    new_context.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
     new_page = new_context.pages[0] if new_context.pages else await new_context.new_page()
     new_page.on("dialog", handle_dialog)
 
     await new_page.goto(
-        "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+        KLASSMATT_HOME,
         wait_until="networkidle",
     )
     sessao_ok = await verificar_sessao(new_page)
@@ -118,7 +120,7 @@ async def _restart_browser(pw, context):
     # Selecionar "Todas as Solicitações"
     try:
         await new_page.select_option(
-            "select:has(option[value='SOMENTE_REC_ACAO'])",
+            SELECTORS["worklist_filter_dropdown"],
             label="Todas as Solicitações",
         )
         await new_page.evaluate("() => { pesquisar(0, ''); }")
@@ -149,7 +151,7 @@ async def _navigate_to_worklist(page):
         if await _check_page_error(page):
             log.warning("Página de erro detectada — voltando para Principal")
             await page.goto(
-                "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+                KLASSMATT_HOME,
                 wait_until="networkidle",
             )
             await page.wait_for_timeout(3000)
@@ -228,7 +230,7 @@ async def _voltar_worklist(page):
 
     try:
         await page.select_option(
-            "select:has(option[value='SOMENTE_REC_ACAO'])",
+            SELECTORS["worklist_filter_dropdown"],
             label="Todas as Solicitações",
         )
         await page.evaluate("() => { pesquisar(0, ''); }")
@@ -550,6 +552,9 @@ async def verify_and_fix_sin(
         # Corrigir cada campo divergente (non-PDM)
         try:
             if not verify_only:
+                # Re-hide overlays antes de clicar em tabs (podem reaparecer após verify)
+                await hide_overlays(item_page)
+
                 if needs_unspsc and item.get("unspsc"):
                     await fill_unspsc(item_page, str(item["unspsc"]))
                     result["fixed"].append("UNSPSC")
@@ -574,6 +579,13 @@ async def verify_and_fix_sin(
                     await upload_documents(item_page, doc_files)
                     result["fixed"].append("Mídias")
                     log.info(f"  ✓ Mídias: {len(doc_files)} doc(s)")
+
+                # Validar descrição SAP (Exibe D2 / 40 chars) — mesmo step 9 do main.py
+                try:
+                    await hide_overlays(item_page)
+                    await validate_sap_description(item_page)
+                except Exception as sap_err:
+                    log.warning(f"  validate_sap_description falhou: {sap_err}")
 
             # Salvar geral para limpar dirty state antes de navegar para PDM/Descrições
             if (needs_reference or needs_relationship) and (has_pdm_in_excel or has_attrs_in_excel):
@@ -638,6 +650,9 @@ async def verify_and_fix_sin(
 
             # ── FASE 3: Verify + Fix PDM/Atributos (entrada única em DescricaoV3) ──
             if has_pdm_in_excel or has_attrs_in_excel:
+                # Re-hide overlays antes de navegar para outra tab
+                await hide_overlays(item_page)
+
                 # Navegar para DescricaoV3
                 await item_page.evaluate("""() => {
                     window.confirm = () => true;
@@ -877,21 +892,21 @@ async def run():
         viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
         args=[f"--window-size={VIEWPORT_WIDTH},{VIEWPORT_HEIGHT}"],
     )
-    context.set_default_timeout(30_000)
-    context.set_default_navigation_timeout(60_000)
+    context.set_default_timeout(ACTION_TIMEOUT)
+    context.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
     page = context.pages[0] if context.pages else await context.new_page()
     page.on("dialog", handle_dialog)
 
     # Navegar para worklist
     try:
         await page.goto(
-            "https://modec.klassmatt.com.br/MenuPrincipal.aspx",
+            KLASSMATT_HOME,
             wait_until="networkidle",
         )
         await page.click("text=Acompanhamento das Solicitações (Worklist)")
         await page.wait_for_load_state("networkidle")
         await page.select_option(
-            "select:has(option[value='SOMENTE_REC_ACAO'])",
+            SELECTORS["worklist_filter_dropdown"],
             label="Todas as Solicitações",
         )
         await page.evaluate("() => { pesquisar(0, ''); }")
