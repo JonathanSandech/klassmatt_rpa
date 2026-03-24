@@ -58,8 +58,10 @@ async def _navigate_to_tab(page: Page) -> None:
 
 async def _add_relationship(page: Page, codigo_60: str) -> None:
     """Adiciona um novo relacionamento (Adicionar → preencher → Salvar)."""
-    add_btn = page.locator(SELECTORS["rel_add_btn"])
-    await add_btn.click()
+    await page.evaluate("""() => {
+        const btn = document.querySelector("input[id$='Imagebutton7']");
+        if (btn) btn.click();
+    }""")
     await page.wait_for_load_state("networkidle")
 
     await _fill_fields(page, codigo_60)
@@ -89,8 +91,10 @@ async def _save(page: Page, codigo_60: str) -> None:
     """Salva o relacionamento e verifica resultado."""
     _browser.last_dialog_message = ""
 
-    save_btn = page.locator(SELECTORS["rel_save_btn"])
-    await save_btn.click()
+    await page.evaluate("""() => {
+        const btn = document.querySelector('#ibutUpdateRelac');
+        if (btn) btn.click();
+    }""")
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(1000)
 
