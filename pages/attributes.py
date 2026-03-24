@@ -355,12 +355,12 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         # Usar evaluate pois pode haver milhares de nós (1900+)
         found = await popup_page.evaluate(
             """(value) => {
-                // Filter only VISIBLE nodes — collapsed sub-nodes (e.g. PORCA under PARAFUSO)
-                // have zero bounding rect and must be excluded to avoid wrong selection
+                // Filter out collapsed sub-nodes (e.g. PORCA under PARAFUSO)
+                // Collapsed nodes have offsetParent===null or offsetHeight===0 (display:none)
+                // but offscreen nodes (below scroll) still have offsetHeight > 0
                 const allNodes = document.querySelectorAll('a.nodeStyle, a.nodeStyleSel');
                 const nodes = Array.from(allNodes).filter(a => {
-                    const r = a.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
+                    return a.offsetHeight > 0;
                 });
                 const upper = value.toUpperCase().trim();
 
