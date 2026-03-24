@@ -88,6 +88,6 @@ async def fill_ncm(page: Page, ncm: str) -> bool:
         # Salvar para persistir o NCM (sem Salvar, valor é perdido ao trocar de aba)
         await safe_click(page, SELECTORS["salvar_btn"])
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(1000)
+        await page.wait_for_timeout(500)
         log.info(f"NCM {ncm} preenchido e salvo")
         return True

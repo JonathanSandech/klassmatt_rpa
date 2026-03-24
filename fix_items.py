@@ -71,7 +71,7 @@ async def _navigate_to_worklist(page):
             else if (principal) principal.click();
         }""")
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(2000)
 
 
 async def _search_and_open_sin(page, sin: str):
@@ -85,7 +85,7 @@ async def _search_and_open_sin(page, sin: str):
         if (ta) ta.value = '{sin}';
         pesquisar(0, '');
     }}""")
-    await page.wait_for_timeout(5000)
+    await page.wait_for_timeout(2000)
 
     # Clicar no link do resultado — usa OpenNewTab, abre em nova aba
     pages_before = len(page.context.pages)
@@ -155,7 +155,7 @@ async def _atuar_no_item(page):
         if (btn) btn.click();
     }""")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(1000)
     await hide_overlays(page)
 
 

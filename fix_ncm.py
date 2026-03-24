@@ -50,7 +50,7 @@ async def fix_ncm_for_sin(page, sin: str, ncm_formatted: str) -> str:
             else if (principal) principal.click();
         }""")
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(1500)
 
     # Buscar SIN
     await page.evaluate(f"""() => {{
@@ -63,7 +63,7 @@ async def fix_ncm_for_sin(page, sin: str, ncm_formatted: str) -> str:
     # Abrir SIN
     await page.evaluate(f"() => {{ abreSIN({sin}); }}")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(1500)
 
     # Checar status
     status = await page.evaluate(
@@ -84,7 +84,7 @@ async def fix_ncm_for_sin(page, sin: str, ncm_formatted: str) -> str:
         try:
             await sim_btn.click(timeout=5000)
             await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(1500)
         except Exception:
             log.warning(f"  Botão Sim não encontrado para Retornar Etapa")
             # Voltar para worklist
@@ -133,7 +133,7 @@ async def fix_ncm_for_sin(page, sin: str, ncm_formatted: str) -> str:
         if (btn) btn.click();
     }""")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(1500)
 
     if not ncm_atual:
         # Clicar aba Fiscal
@@ -143,7 +143,7 @@ async def fix_ncm_for_sin(page, sin: str, ncm_formatted: str) -> str:
             if (tab) tab.click();
         }""")
         await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(1000)
 
         # Verificar se editável
         editable = await page.evaluate(
@@ -178,14 +178,14 @@ async def fix_ncm_for_sin(page, sin: str, ncm_formatted: str) -> str:
     remeter = page.locator("input[value='Remeter Modec']")
     if await remeter.count() > 0:
         await remeter.click()
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(1500)
 
         # Confirmar
         sim_btn = page.locator("input[value='Sim']")
         try:
             await sim_btn.click(timeout=5000)
             await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(1500)
         except Exception:
             log.warning(f"  Confirmação Remeter não encontrada")
     else:
@@ -243,7 +243,7 @@ async def run():
     await page.select_option("select:has(option[value='SOMENTE_REC_ACAO'])", label="Todas as Solicitações")
     await page.evaluate("() => { pesquisar(0, ''); }")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(1500)
 
     results = {"ok": 0, "skipped": 0, "error": 0}
 
@@ -265,11 +265,11 @@ async def run():
                 await page.goto("https://modec.klassmatt.com.br/MenuPrincipal.aspx", wait_until="networkidle")
                 await page.click("text=Acompanhamento das Solicitações (Worklist)")
                 await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(1500)
                 await page.select_option("select:has(option[value='SOMENTE_REC_ACAO'])", label="Todas as Solicitações")
                 await page.evaluate("() => { pesquisar(0, ''); }")
                 await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(1500)
             except Exception:
                 log.error("Falha na recuperação — encerrando")
                 break
