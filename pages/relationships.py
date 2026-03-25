@@ -77,48 +77,18 @@ async def _fill_fields(page: Page, codigo_60: str) -> None:
     from browser import hide_overlays
     await hide_overlays(page)
 
-    # Tipo: CÓDIGO ANTIGO — abrir dropdown via JS focus+click, depois selecionar
-    await page.evaluate("""() => {
-        const el = document.querySelector("input[name*='tabRelaciona'][id='txtTipo']");
-        if (el) { el.focus(); el.click(); }
-    }""")
-    await page.wait_for_timeout(1000)
-    # Selecionar CÓDIGO ANTIGO do dropdown via Playwright click (para triggar sel())
-    try:
-        await page.locator(f"a:has-text('{RELATIONSHIP_TYPE}')").first.click(timeout=5_000)
-    except Exception:
-        # Fallback: tentar via JS sel() diretamente
-        log.debug("CÓDIGO ANTIGO não clicável — tentando sel(0) via JS")
-        await page.evaluate("""() => {
-            if (typeof sel === 'function') sel(0);
-        }""")
-    await page.wait_for_timeout(500)
-
-    # Código — setar via JS (evitar onblur issues)
+    # Setar todos os campos via JS diretamente
+    # Os dropdowns (Tipo, Status) são campos de texto simples — o autocomplete
+    # é apenas UI sugar, o ASP.NET postback envia o text value do input.
     await page.evaluate(f"""() => {{
-        const el = document.querySelector('#txtCodigoRel');
-        if (el) {{ el.focus(); el.value = '{codigo_60}'; }}
-    }}""")
-
-    # Status: ATIVO ERP — mesma técnica (id=txtStatus dentro da aba Relacionamentos)
-    await page.evaluate("""() => {
-        const el = document.querySelector("input[name*='tabRelaciona'][id='txtStatus']");
-        if (el) { el.focus(); el.click(); }
-    }""")
-    await page.wait_for_timeout(1000)
-    try:
-        await page.locator(f"a:has-text('{RELATIONSHIP_STATUS}')").first.click(timeout=5_000)
-    except Exception:
-        log.debug("ATIVO ERP não clicável — tentando sel(0) via JS")
-        await page.evaluate("""() => {
-            if (typeof sel === 'function') sel(0);
-        }""")
-    await page.wait_for_timeout(500)
-
-    # Comentário: ZBRA — setar via JS
-    await page.evaluate(f"""() => {{
-        const el = document.querySelector('#txtComentario');
-        if (el) {{ el.focus(); el.value = '{RELATIONSHIP_COMMENT}'; }}
+        const tipo = document.querySelector("input[name*='tabRelaciona'][id='txtTipo']");
+        const codigo = document.querySelector('#txtCodigoRel');
+        const status = document.querySelector("input[name*='tabRelaciona'][id='txtStatus']");
+        const comentario = document.querySelector('#txtComentario');
+        if (tipo) tipo.value = '{RELATIONSHIP_TYPE}';
+        if (codigo) codigo.value = '{codigo_60}';
+        if (status) status.value = '{RELATIONSHIP_STATUS}';
+        if (comentario) comentario.value = '{RELATIONSHIP_COMMENT}';
     }}""")
 
 
