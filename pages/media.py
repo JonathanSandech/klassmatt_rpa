@@ -82,19 +82,20 @@ async def _get_existing_docs(media_page: Page) -> dict:
         """() => {
             const names = [];
             const allText = document.body.innerText || '';
+
+            // 1. Contar pelo label "PDF (N)" no texto
             const pdfMatch = allText.match(/PDF\\s*\\((\\d+)\\)/);
             let count = pdfMatch ? parseInt(pdfMatch[1]) : 0;
 
-            const mediaLinks = document.querySelectorAll('a[href*="GetMidia"], a[href*="getMidia"], a[onclick*="Midia"]');
+            // 2. Links de download de mídia (GetMidia = doc real, não UI chrome)
+            const mediaLinks = document.querySelectorAll('a[href*="GetMidia"], a[href*="getMidia"]');
             if (mediaLinks.length > count) count = mediaLinks.length;
 
-            const gridRows = document.querySelectorAll('tr:has(a[href*="Midia"]), tr:has(img[src*="pdf"]), tr:has(img[src*="icon"])');
-            if (gridRows.length > count) count = gridRows.length;
-
+            // 3. Nomes de documentos (padrão XXXX-XX-XXXX-*)
             const spans = document.querySelectorAll('span, td, div, a');
             for (const s of spans) {
                 const text = (s.innerText || s.textContent || '').trim();
-                if (text.match(/^\\d{4}-\\d{2}-\\d{4}/) || text.match(/\\.pdf$/i)) {
+                if (text.match(/^\\d{4}-\\d{2}-\\d{4}/) || text.match(/^\\d{4}-[A-Z].*\\.pdf$/i)) {
                     names.push(text.replace(/\\.pdf$/i, ''));
                 }
             }
