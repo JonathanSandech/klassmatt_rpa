@@ -69,25 +69,57 @@ async def _add_relationship(page: Page, codigo_60: str) -> None:
 
 
 async def _fill_fields(page: Page, codigo_60: str) -> None:
-    """Preenche os campos do formulário de relacionamento."""
+    """Preenche os campos do formulário de relacionamento.
+
+    Usa JS para setar os campos e triggar autocomplete via focus+click.
+    Os dropdowns de Tipo e Status usam autocomplete com javascript:sel(N).
+    """
     from browser import hide_overlays
     await hide_overlays(page)
 
-    # Tipo: CÓDIGO ANTIGO
-    await safe_click(page, SELECTORS["rel_tipo_input"])
+    # Tipo: CÓDIGO ANTIGO — abrir dropdown via JS focus+click, depois selecionar
+    await page.evaluate("""() => {
+        const el = document.querySelector("input[name*='tabRelaciona'][id='txtTipo']");
+        if (el) { el.focus(); el.click(); }
+    }""")
+    await page.wait_for_timeout(1000)
+    # Selecionar CÓDIGO ANTIGO do dropdown via Playwright click (para triggar sel())
+    try:
+        await page.locator(f"a:has-text('{RELATIONSHIP_TYPE}')").first.click(timeout=5_000)
+    except Exception:
+        # Fallback: tentar via JS sel() diretamente
+        log.debug("CÓDIGO ANTIGO não clicável — tentando sel(0) via JS")
+        await page.evaluate("""() => {
+            if (typeof sel === 'function') sel(0);
+        }""")
     await page.wait_for_timeout(500)
-    await safe_click(page, f"a:has-text('{RELATIONSHIP_TYPE}')")
 
-    # Código
-    await safe_fill(page, SELECTORS["rel_codigo_input"], str(codigo_60))
+    # Código — setar via JS (evitar onblur issues)
+    await page.evaluate(f"""() => {{
+        const el = document.querySelector('#txtCodigoRel');
+        if (el) {{ el.focus(); el.value = '{codigo_60}'; }}
+    }}""")
 
-    # Status: ATIVO ERP
-    await safe_click(page, SELECTORS["rel_status_input"])
+    # Status: ATIVO ERP — mesma técnica (id=txtStatus dentro da aba Relacionamentos)
+    await page.evaluate("""() => {
+        const el = document.querySelector("input[name*='tabRelaciona'][id='txtStatus']");
+        if (el) { el.focus(); el.click(); }
+    }""")
+    await page.wait_for_timeout(1000)
+    try:
+        await page.locator(f"a:has-text('{RELATIONSHIP_STATUS}')").first.click(timeout=5_000)
+    except Exception:
+        log.debug("ATIVO ERP não clicável — tentando sel(0) via JS")
+        await page.evaluate("""() => {
+            if (typeof sel === 'function') sel(0);
+        }""")
     await page.wait_for_timeout(500)
-    await safe_click(page, f"a:has-text('{RELATIONSHIP_STATUS}')")
 
-    # Comentário: ZBRA
-    await safe_fill(page, SELECTORS["rel_comentario_input"], RELATIONSHIP_COMMENT)
+    # Comentário: ZBRA — setar via JS
+    await page.evaluate(f"""() => {{
+        const el = document.querySelector('#txtComentario');
+        if (el) {{ el.focus(); el.value = '{RELATIONSHIP_COMMENT}'; }}
+    }}""")
 
 
 async def _save(page: Page, codigo_60: str) -> None:
