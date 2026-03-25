@@ -64,6 +64,15 @@ async def _add_relationship(page: Page, codigo_60: str) -> None:
     }""")
     await page.wait_for_load_state("networkidle")
 
+    # Aguardar o form de edição aparecer (txtTipo dentro de dgRelacionamento)
+    try:
+        await page.locator("input[name*='tabRelaciona'][id='txtTipo']").wait_for(
+            state="attached", timeout=5000
+        )
+    except Exception:
+        log.warning("Form de relacionamento não apareceu após Adicionar — aguardando mais")
+        await page.wait_for_timeout(2000)
+
     await _fill_fields(page, codigo_60)
     await _save(page, codigo_60)
 
@@ -80,7 +89,7 @@ async def _fill_fields(page: Page, codigo_60: str) -> None:
     # Setar todos os campos via JS diretamente
     # Os dropdowns (Tipo, Status) são campos de texto simples — o autocomplete
     # é apenas UI sugar, o ASP.NET postback envia o text value do input.
-    await page.evaluate(f"""() => {{
+    result = await page.evaluate(f"""() => {{
         const tipo = document.querySelector("input[name*='tabRelaciona'][id='txtTipo']");
         const codigo = document.querySelector('#txtCodigoRel');
         const status = document.querySelector("input[name*='tabRelaciona'][id='txtStatus']");
@@ -89,7 +98,14 @@ async def _fill_fields(page: Page, codigo_60: str) -> None:
         if (codigo) codigo.value = '{codigo_60}';
         if (status) status.value = '{RELATIONSHIP_STATUS}';
         if (comentario) comentario.value = '{RELATIONSHIP_COMMENT}';
+        return {{
+            tipo: tipo ? tipo.value : null,
+            codigo: codigo ? codigo.value : null,
+            status: status ? status.value : null
+        }};
     }}""")
+    if not result.get("tipo"):
+        log.warning(f"  Campo txtTipo não encontrado ou vazio após set — relacionamento pode falhar")
 
 
 async def _save(page: Page, codigo_60: str) -> None:
