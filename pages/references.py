@@ -48,50 +48,36 @@ def _is_placeholder_ref(raw: str) -> bool:
 
 
 async def _select_autocomplete(page: Page, empresa: str) -> bool:
-    """Tenta selecionar a empresa no autocomplete. Retorna True se selecionou."""
+    """Tenta selecionar a empresa no autocomplete via Playwright click.
 
-    # 1. JS fallback — qualquer lista de autocomplete visível (mais confiável)
-    try:
-        clicked = await page.evaluate(
-            """() => {
-                const lists = document.querySelectorAll('.ac_results, .ui-autocomplete, [id*="autocomplete"]');
-                for (const list of lists) {
-                    if (list.offsetParent !== null) {
-                        const items = list.querySelectorAll('li a, li');
-                        if (items.length > 0) { items[0].click(); return true; }
-                    }
-                }
-                return false;
-            }"""
-        )
-        if clicked:
-            return True
-    except Exception:
-        pass
+    IMPORTANTE: usar Playwright click (não JS click) para que o Klassmatt
+    execute o href javascript:sel(N) que seta o hidden field do fabricante.
+    JS el.click() não trigga os event handlers do ASP.NET corretamente.
+    """
 
-    # 2. Match exato via texto (case-insensitive)
+    # 1. Primeiro item visível no autocomplete (Playwright click)
+    for ac_sel in [
+        "ul li:first-child a[href*='sel(']",
+        "ul li:first-child a",
+        ".ac_results li:first-child a",
+        ".ui-autocomplete li:first-child a",
+    ]:
+        try:
+            el = page.locator(ac_sel).first
+            if await el.count() > 0 and await el.is_visible(timeout=1_000):
+                await el.click(timeout=3_000)
+                return True
+        except Exception:
+            continue
+
+    # 2. Match exato via texto (case-insensitive, Playwright click)
     try:
         await page.locator(f"a:text-matches('{re.escape(empresa)}', 'i')").first.click(timeout=3_000)
         return True
     except Exception:
         pass
 
-    # 3. Qualquer item visível no autocomplete (jQuery UI, ac_results)
-    for ac_sel in [
-        ".ac_results li:first-child a",
-        ".ac_results li:first-child",
-        ".ui-autocomplete li:first-child a",
-        ".ui-autocomplete li:first-child",
-    ]:
-        try:
-            el = page.locator(ac_sel).first
-            if await el.count() > 0 and await el.is_visible():
-                await el.click(timeout=3_000)
-                return True
-        except Exception:
-            continue
-
-    # 4. Match parcial com primeira palavra
+    # 3. Match parcial com primeira palavra
     first_word = empresa.split()[0] if empresa.split() else empresa
     try:
         await page.locator(f"a:text-matches('{re.escape(first_word)}', 'i')").first.click(timeout=5_000)
@@ -103,15 +89,12 @@ async def _select_autocomplete(page: Page, empresa: str) -> bool:
 
 
 async def _close_fabricante_tab_and_cancel_form(page: Page) -> None:
-    """Fecha aba de cadastro de fabricante (se aberta) e cancela o form de edição.
+    """Fecha aba de cadastro de fabricante (se aberta) após save.
 
     Quando o fabricante não existe, o confirm dialog "Deseja cadastra-lo?" abre
-    FabricanteFornecManu.aspx numa nova aba. A referência já é salva nesse ponto,
-    mas o form de edição continua aberto (dirty state). Precisamos:
-    1. Fechar a aba do fabricante (se existir)
-    2. Clicar Cancelar no form de edição para limpar o dirty state
+    FabricanteFornecManu.aspx numa nova aba. Apenas fechar a aba extra.
     """
-    # 1. Fechar abas auxiliares de fabricante (FabricanteFornecManu.aspx)
+    # Fechar abas auxiliares de fabricante (FabricanteFornecManu.aspx)
     try:
         all_pages = page.context.pages
         for p in all_pages:
@@ -126,35 +109,35 @@ async def _close_fabricante_tab_and_cancel_form(page: Page) -> None:
 
     await page.wait_for_timeout(500)
 
-    # 2. Se o form de edição ainda está aberto, clicar Cancelar
-    #    (a referência já foi salva — Cancelar apenas fecha o form)
-    try:
-        cancelar = page.locator("#btnCancelar").first
-        if await cancelar.is_visible(timeout=1_500):
-            log.debug("Form referência ainda aberto após save — clicando Cancelar para limpar dirty state")
-            await page.evaluate("() => { const b = document.querySelector('#btnCancelar'); if (b) b.click(); }")
-            await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(1000)
-    except Exception:
-        pass
-
-    # 3. Garantir que saímos do dirty state recarregando a aba
-    try:
-        await safe_click(page, SELECTORS["tab_referencias"])
-        await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(1000)
-    except Exception:
-        pass
-
 
 async def _verify_ref_saved(page: Page, part_number: str) -> bool:
-    """Verifica se a referência foi realmente salva checando divReferencias."""
+    """Verifica se a referência foi realmente salva.
+
+    Checa 2 coisas:
+    1. O form de edição fechou (btnSalvar não visível = postback OK)
+    2. O part number aparece no divReferencias
+    """
     try:
-        ref_text = await page.evaluate("""() => {
+        result = await page.evaluate("""(pn) => {
+            // Se o form de edição ainda está aberto, o save falhou
+            const btnSalvar = document.querySelector('#btnSalvar');
+            if (btnSalvar && btnSalvar.offsetParent !== null) {
+                return {saved: false, reason: 'form_still_open'};
+            }
+            // Checar se o PN aparece na lista de referências
             const div = document.querySelector('#divReferencias');
-            return div ? div.innerText.trim() : '';
-        }""")
-        return part_number in ref_text
+            const refText = div ? div.innerText.trim() : '';
+            if (pn && refText.includes(pn)) {
+                return {saved: true, reason: 'pn_found'};
+            }
+            // Checar se N/A/N/A ainda é o valor (placeholder)
+            if (refText.includes('N/A/N/A') || refText.includes('N/A / N/A')) {
+                return {saved: false, reason: 'still_placeholder'};
+            }
+            return {saved: refText.length > 0, reason: 'unknown'};
+        }""", part_number)
+        log.debug(f"  _verify_ref_saved: saved={result['saved']}, reason={result['reason']}, pn='{part_number}'")
+        return result["saved"]
     except Exception:
         return False
 
@@ -223,15 +206,27 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     await page.wait_for_timeout(300)
     empresa_input = page.locator(SELECTORS["ref_empresa_input"])
     await empresa_input.press_sequentially(str(empresa), delay=50)
+    # Log o valor real após digitação
+    typed_value = await page.evaluate("() => document.querySelector('#txtNome')?.value || ''")
+    log.debug(f"  Após press_sequentially: txtNome='{typed_value}' (esperado='{empresa}')")
     await page.wait_for_timeout(2000)
 
     # Selecionar empresa no autocomplete
     autocomplete_ok = await _select_autocomplete(page, empresa)
-    if not autocomplete_ok:
+    if autocomplete_ok:
+        selected_value = await page.evaluate("() => document.querySelector('#txtNome')?.value || ''")
+        log.debug(f"  Autocomplete selecionado: txtNome='{selected_value}'")
+    else:
         log.warning(f"Autocomplete empresa '{empresa}' não encontrado — continuando sem seleção")
 
-    # Preencher Part Number
-    await safe_fill(page, SELECTORS["ref_partnumber_input"], str(part_number))
+    # Preencher Part Number via JS (não usar page.fill que trigga onblur no txtNome
+    # e pode resetar o fabricante selecionado pelo autocomplete)
+    await page.evaluate("""(pn) => {
+        const el = document.querySelector('#txtReferencia');
+        if (el) { el.focus(); el.value = pn; }
+    }""", str(part_number))
+    pn_value = await page.evaluate("() => document.querySelector('#txtReferencia')?.value || ''")
+    log.debug(f"  Após fill PN: txtReferencia='{pn_value}' (esperado='{part_number}')")
 
     # Salvar referência via btnSalvar (botão do form de referência, NÃO o butSalvar do footer)
     await page.evaluate("""() => {
@@ -256,10 +251,25 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
             pass
         return False
 
-    # Fechar aba de fabricante se abriu + cancelar form se ainda aberto
+    # Fechar aba de fabricante se abriu
     await _close_fabricante_tab_and_cancel_form(page)
 
-    # Recarregar aba referências para garantir estado limpo antes de verificar
+    # Salvar item inteiro via butSalvar do footer para persistir no banco
+    # (btnSalvar da referência salva no ViewState, mas NÃO commita no servidor;
+    #  o save só persiste se clicarmos butSalvar ou fizermos outro postback que salva)
+    try:
+        from browser import hide_overlays
+        await hide_overlays(page)
+        await page.evaluate("""() => {
+            const btn = document.querySelector('#butSalvar');
+            if (btn) btn.click();
+        }""")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(2000)
+    except Exception as e:
+        log.debug(f"  butSalvar (footer) falhou: {e}")
+
+    # Navegar para aba Referências para verificar
     try:
         await safe_click(page, SELECTORS["tab_referencias"])
         await page.wait_for_load_state("networkidle")
