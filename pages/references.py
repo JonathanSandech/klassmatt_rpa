@@ -213,9 +213,15 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
 
     # Preencher empresa — usar press_sequentially para triggar autocomplete
     # (page.fill substitui tudo de vez e não gera os eventos de keystroke)
+    # Triple-click+delete via JS para limpar campo corretamente (el.value='' não limpa binding)
+    # Depois focus via JS para evitar intercept do aspnetForm overlay
+    await page.evaluate("""() => {
+        const el = document.querySelector('#txtNome');
+        if (el) { el.select(); }
+    }""")
+    await page.keyboard.press("Delete")
+    await page.wait_for_timeout(300)
     empresa_input = page.locator(SELECTORS["ref_empresa_input"])
-    await empresa_input.click()
-    await empresa_input.fill("")  # limpar campo
     await empresa_input.press_sequentially(str(empresa), delay=50)
     await page.wait_for_timeout(2000)
 
@@ -252,6 +258,14 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
 
     # Fechar aba de fabricante se abriu + cancelar form se ainda aberto
     await _close_fabricante_tab_and_cancel_form(page)
+
+    # Recarregar aba referências para garantir estado limpo antes de verificar
+    try:
+        await safe_click(page, SELECTORS["tab_referencias"])
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(1000)
+    except Exception:
+        pass
 
     # Verificar se a referência realmente foi salva no Klassmatt
     saved = await _verify_ref_saved(page, part_number)
