@@ -720,6 +720,25 @@ async def verify_and_fix_sin(
 
             # ── FASE 3: Verify + Fix PDM/Atributos (entrada única em DescricaoV3) ──
             if has_pdm_in_excel or has_attrs_in_excel:
+                # Primeiro checar PDM pelo campo txtPadrao (disponível em ITEM_Edita)
+                # Isso não depende de navegar para DescricaoV3
+                pdm_field = await item_page.evaluate("""() => {
+                    const el = document.querySelector('#txtPadrao');
+                    return el ? el.value : null;
+                }""")
+                log.info(f"  + PDM/Atributos: PDM")
+                if pdm_field and str(pdm_field) != "1" and has_pdm_in_excel:
+                    # PDM já está setado (não é o default "1")
+                    # Checar se bate com o esperado
+                    if str(pdm_field) == str(item["pdm"]):
+                        log.debug(f"  PDM já correto ({pdm_field}) — pulando change_pdm")
+                    else:
+                        log.debug(f"  PDM={pdm_field} diferente do esperado={item['pdm']}")
+                        needs_pdm = True
+                elif has_pdm_in_excel and (not pdm_field or str(pdm_field) == "1"):
+                    # PDM é "1" (NÃO-PADRONIZADO) ou não encontrado
+                    needs_pdm = True
+
                 # Re-hide overlays antes de navegar para outra tab
                 await hide_overlays(item_page)
 
@@ -736,12 +755,17 @@ async def verify_and_fix_sin(
 
                 if "ITEM_Edita_DescricaoV3" not in item_page.url:
                     await item_page.evaluate("""() => {
+                        window.confirm = () => true;
+                        window.alert = () => {};
                         const links = document.querySelectorAll('a');
                         const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
                         if (link) link.click();
                     }""")
                     await item_page.wait_for_load_state("networkidle")
                     await item_page.wait_for_timeout(1000)
+
+                if "ITEM_Edita_DescricaoV3" not in item_page.url:
+                    log.warning(f"  Não conseguiu navegar para DescricaoV3 (URL={item_page.url})")
 
                 # Ler PDM e atributos in-place
                 pdm_data = await item_page.evaluate("""() => {
@@ -773,15 +797,18 @@ async def verify_and_fix_sin(
                     return data;
                 }""")
 
-                # Computar diffs de PDM
+                # Computar diffs de PDM (pode já ter sido detectado via txtPadrao acima)
                 if has_pdm_in_excel and not pdm_data.get("padronizado", True):
+                    if not needs_pdm:
+                        needs_pdm = True
+                    needs_attributes = True  # PDM errado → atributos precisam ser refeitos
+                if needs_pdm:
                     result["diffs"].append({
                         "field": "PDM",
                         "expected": str(item["pdm"]),
-                        "actual": "(NÃO-PADRONIZADO)",
+                        "actual": f"(atual: {pdm_field or 'NÃO-PADRONIZADO'})",
                     })
-                    needs_pdm = True
-                    needs_attributes = True  # PDM errado → atributos precisam ser refeitos
+                    needs_attributes = True
 
                 # Computar diffs de atributos
                 if not needs_pdm:
