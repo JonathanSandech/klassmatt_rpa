@@ -451,6 +451,48 @@ async def verify_and_fix_sin(
         await hide_overlays(item_page)
         log.debug(f"  Página de edição: {item_page.url}")
 
+        # ── Limpar dirty state residual (tentativas anteriores) ──
+        # Ir na aba Referências, cancelar form se aberto, depois butSalvar preventivo.
+        try:
+            # Navegar para Referências para cancelar form aberto
+            await item_page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                const tabs = document.querySelectorAll('a');
+                const ref = Array.from(tabs).find(a => a.innerText.includes('Referências'));
+                if (ref) ref.click();
+            }""")
+            await item_page.wait_for_load_state("networkidle")
+            await item_page.wait_for_timeout(1000)
+
+            # Se form de edição está aberto, cancelar
+            form_cancelled = await item_page.evaluate("""() => {
+                const btn = document.querySelector('#btnCancelar');
+                if (btn && btn.offsetParent !== null) { btn.click(); return true; }
+                return false;
+            }""")
+            if form_cancelled:
+                log.debug("  Cancelado form referência residual (dirty state)")
+                await item_page.wait_for_load_state("networkidle")
+                await item_page.wait_for_timeout(1000)
+
+            # butSalvar preventivo para limpar dirty state
+            await item_page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                const btn = document.querySelector('#butSalvar');
+                if (btn) btn.click();
+            }""")
+            await item_page.wait_for_load_state("networkidle")
+            await item_page.wait_for_timeout(2000)
+            await item_page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+            }""")
+            await hide_overlays(item_page)
+        except Exception:
+            pass
+
         # ── VERIFY: ler todos os campos ──
 
         # UNSPSC
