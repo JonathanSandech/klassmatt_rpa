@@ -282,8 +282,10 @@ async def process_item(page, item: dict, wb) -> tuple[str, list[str]]:
         warnings.append("attributes_incomplete")
 
     # 12. Finalizar e Remeter para MODEC
-    await finalizar_e_remeter(page)
-    t.mark("Remeter MODEC")
+    # DESABILITADO: manter em FINALIZACAO para conferir com verify_and_fix antes de remeter
+    # await finalizar_e_remeter(page)
+    # t.mark("Remeter MODEC")
+    log.info("Remeter MODEC desabilitado — item permanece em FINALIZACAO")
 
     # Voltar para worklist
     await page.wait_for_timeout(3_000)
