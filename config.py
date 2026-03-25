@@ -34,10 +34,11 @@ EXCEL_COLUMNS = {
     "empresa": "Empresa",
     "part_number": "Part Number",
     "unspsc": "UNSPSC",
-    "codigo_60": "Código 60",
+    "codigo_61": "Codigo 61",
+    "codigo_60": "Codigo 60",
     "documento": "Documento",
     "pdm": "PDM",
-    # Atributos técnicos: Atrib_1_Valor até Atrib_30_Valor
+    # Atributos técnicos: Atrib_1_Valor / VALOR_N (detectado automaticamente)
 }
 MAX_ATTRIBUTES = 30
 

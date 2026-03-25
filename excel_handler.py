@@ -32,14 +32,20 @@ def load_excel(path: Path | None = None) -> tuple[openpyxl.Workbook, list[dict[s
     header_row = 1
     for row_idx in range(1, min(ws.max_row, 10) + 1):
         row_vals = [cell.value for cell in ws[row_idx]]
-        if "SIN" in row_vals or any(
-            v in row_vals for v in EXCEL_COLUMNS.values()
+        row_vals_upper = [str(v).upper() if v else "" for v in row_vals]
+        if "SIN" in row_vals_upper or any(
+            str(v).upper() in row_vals_upper for v in EXCEL_COLUMNS.values()
         ):
-            headers = {
+            # Mapa case-insensitive: header_upper -> col_idx
+            raw_headers = {
                 ws.cell(row=row_idx, column=col).value: col
                 for col in range(1, ws.max_column + 1)
                 if ws.cell(row=row_idx, column=col).value
             }
+            # Mapa normalizado para lookup case-insensitive
+            headers_upper = {str(k).upper(): col for k, col in raw_headers.items()}
+            headers = raw_headers
+            headers["_upper"] = headers_upper
             header_row = row_idx
             break
 
@@ -52,16 +58,30 @@ def load_excel(path: Path | None = None) -> tuple[openpyxl.Workbook, list[dict[s
     for row_idx in range(header_row + 1, ws.max_row + 1):
         row_data = {"_row": row_idx}
 
-        # Campos padrão
+        # Campos padrão (case-insensitive + aliases)
+        _upper = headers.get("_upper", {})
         for key, col_name in EXCEL_COLUMNS.items():
-            col_idx = headers.get(col_name)
+            col_idx = headers.get(col_name) or _upper.get(str(col_name).upper())
             row_data[key] = ws.cell(row=row_idx, column=col_idx).value if col_idx else None
 
-        # Atributos técnicos (Atrib_1_Valor ... Atrib_30_Valor)
+        # Aliases para colunas com nomes diferentes entre planilhas
+        _aliases = {
+            "codigo_60": ["CÓDIGO 60", "CODIGO 60", "COD60"],
+            "codigo_61": ["CÓDIGO 61", "CODIGO 61", "COD61"],
+            "documento": ["DOCUMENTO", "DOCUMENTOS"],
+        }
+        for key, aliases in _aliases.items():
+            if not row_data.get(key):
+                for alias in aliases:
+                    col_idx = _upper.get(alias.upper())
+                    if col_idx:
+                        row_data[key] = ws.cell(row=row_idx, column=col_idx).value
+                        break
+
+        # Atributos técnicos: Atrib_N_Valor ou VALOR_N
         attrs = []
         for n in range(1, MAX_ATTRIBUTES + 1):
-            col_name = f"Atrib_{n}_Valor"
-            col_idx = headers.get(col_name)
+            col_idx = headers.get(f"Atrib_{n}_Valor") or _upper.get(f"VALOR_{n}")
             val = ws.cell(row=row_idx, column=col_idx).value if col_idx else None
             attrs.append(val)
         row_data["attributes"] = attrs
