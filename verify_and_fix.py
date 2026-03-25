@@ -242,6 +242,19 @@ async def _voltar_worklist(page):
 
 async def _retornar_etapa(page) -> bool:
     """Retorna o item de APROVACAO-TECNICA para FINALIZACAO."""
+    # Verificar se o botão está habilitado (disabled = sem permissão nesta etapa)
+    btn_state = await page.evaluate("""() => {
+        const btn = document.querySelector('#lkbutTrazerDeVolta');
+        if (!btn) return {exists: false};
+        return {exists: true, disabled: btn.disabled};
+    }""")
+    if not btn_state.get("exists"):
+        log.warning("  Botão 'Retornar Etapa' não encontrado")
+        return False
+    if btn_state.get("disabled"):
+        log.warning("  Botão 'Retornar Etapa' disabled — sem permissão para retornar nesta etapa")
+        return False
+
     log.info("  Retornando etapa (APROVACAO-TECNICA → FINALIZACAO)...")
     await page.evaluate("""() => {
         const btn = document.querySelector('#lkbutTrazerDeVolta');
@@ -249,14 +262,24 @@ async def _retornar_etapa(page) -> bool:
     }""")
     await page.wait_for_timeout(3000)
 
-    sim_btn = page.locator("input[value='Sim']")
-    try:
-        await sim_btn.click(timeout=5000)
-        await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(3000)
-    except Exception:
+    # O painel inline mostra Sim/Não — pode ser input ou link
+    sim_clicked = await page.evaluate("""() => {
+        // Tentar input[value='Sim']
+        const input = document.querySelector("input[value='Sim']");
+        if (input && input.offsetParent !== null) { input.click(); return true; }
+        // Tentar link/button com texto 'Sim'
+        const links = document.querySelectorAll('a, button, input[type="button"]');
+        for (const el of links) {
+            if ((el.textContent || el.value || '').trim() === 'Sim') { el.click(); return true; }
+        }
+        return false;
+    }""")
+    if not sim_clicked:
         log.warning("  Botão 'Sim' não encontrado para Retornar Etapa")
         return False
+
+    await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(3000)
 
     status = await _get_status(page)
     log.info(f"  Status após retorno: {status}")
