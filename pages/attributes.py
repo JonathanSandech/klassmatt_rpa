@@ -105,29 +105,34 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
                 continue
             elif current_val.upper() == "N/A" and value_str.upper() != "N/A":
                 log.info(f"Atributo {i + 1}: existente='N/A' mas planilha='{value_str}' — sobrescrevendo")
-                # Precisa limpar N/A antes de preencher — desmarcar checkbox N/A
-                na_selector = SELECTORS["attr_na_checkbox_tpl"].format(idx=ctl_idx)
-                na_el = page.locator(na_selector)
-                if await na_el.count() > 0:
-                    try:
-                        if await na_el.is_checked():
-                            await safe_click(page, na_selector)
-                            await page.wait_for_timeout(500)
-                    except Exception:
-                        pass
+                # Desmarcar checkbox N/A via JS (display:none no label impede Playwright click)
+                na_name = f"dgDadosTecnicos$ctl{ctl_idx}$ckIsNA"
+                try:
+                    await page.evaluate(f"""() => {{
+                        const ck = document.querySelector("input[name$='{na_name}']");
+                        if (ck && ck.checked) ck.click();
+                    }}""")
+                    await page.wait_for_timeout(500)
+                except Exception:
+                    pass
             else:
                 log.debug(f"Atributo {i + 1}: já preenchido com '{current_val}' (planilha='{value_str}') — pulando")
                 continue
 
         if value_str.upper() == "N/A":
-            # Marcar checkbox N/A
-            na_selector = SELECTORS["attr_na_checkbox_tpl"].format(idx=ctl_idx)
-            na_el = page.locator(na_selector)
-            if await na_el.count() == 0:
+            # Marcar checkbox N/A via JS (o checkbox fica dentro de <label display:none>
+            # e não é clicável via Playwright — precisa JS click direto)
+            na_name = f"dgDadosTecnicos$ctl{ctl_idx}$ckIsNA"
+            clicked = await page.evaluate(f"""() => {{
+                const ck = document.querySelector("input[name$='{na_name}']");
+                if (!ck) return false;
+                ck.click();
+                return true;
+            }}""")
+            if not clicked:
                 log.debug(f"Atributo {i + 1}: checkbox N/A não encontrado (ctl{ctl_idx}) — fim dos atributos")
                 break
             log.debug(f"Atributo {i + 1}: N/A")
-            await safe_click(page, na_selector)
             await page.wait_for_timeout(500)
         else:
             # Verificar se o botão de edição existe e está visível
