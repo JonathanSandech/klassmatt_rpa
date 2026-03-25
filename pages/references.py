@@ -261,6 +261,8 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
         from browser import hide_overlays
         await hide_overlays(page)
         await page.evaluate("""() => {
+            window.alert = () => {};
+            window.confirm = () => true;
             const btn = document.querySelector('#butSalvar');
             if (btn) btn.click();
         }""")

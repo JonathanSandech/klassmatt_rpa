@@ -111,10 +111,13 @@ async def _save(page: Page, codigo_60: str) -> None:
 
     # Commitar no servidor via butSalvar do footer
     # (sem isso o save fica só no ViewState e é descartado ao navegar)
+    # Override alerts ANTES — "AVISO: Uma ou mais descrições" bloqueia o postback
     try:
         from browser import hide_overlays
         await hide_overlays(page)
         await page.evaluate("""() => {
+            window.alert = () => {};
+            window.confirm = () => true;
             const btn = document.querySelector('#butSalvar');
             if (btn) btn.click();
         }""")
