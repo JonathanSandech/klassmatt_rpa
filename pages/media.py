@@ -19,7 +19,18 @@ from logger import log
 
 
 async def _open_media_tab(page: Page) -> Page:
-    """Abre a aba Mídias (Midia.aspx) e retorna a page da nova aba."""
+    """Abre a aba Mídias (Midia.aspx) do ITEM e retorna a page da nova aba.
+
+    Fecha abas de mídias residuais (tipo=SIN) antes de abrir a do item.
+    """
+    # Fechar abas de mídias residuais (podem ser da SIN, não do item)
+    for p in page.context.pages:
+        if p != page and "Midia.aspx" in p.url:
+            try:
+                await p.close()
+            except Exception:
+                pass
+
     pages_before = len(page.context.pages)
     await safe_click(page, SELECTORS["tab_midias"])
 
@@ -29,9 +40,15 @@ async def _open_media_tab(page: Page) -> Page:
         if len(page.context.pages) > pages_before:
             break
 
-    # Encontrar a aba de mídias pela URL
+    # Encontrar a aba de mídias do ITEM pela URL (tipo=Itens)
     for p in page.context.pages:
-        if "Midia.aspx" in p.url:
+        if "Midia.aspx" in p.url and "tipo=Itens" in p.url:
+            await p.wait_for_load_state("networkidle")
+            return p
+
+    # Fallback: qualquer Midia.aspx nova
+    for p in page.context.pages:
+        if "Midia.aspx" in p.url and p != page:
             await p.wait_for_load_state("networkidle")
             return p
 
