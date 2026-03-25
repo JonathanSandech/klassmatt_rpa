@@ -10,35 +10,16 @@ from logger import log
 
 
 async def _click_tab(page: Page, tab_name: str) -> None:
-    """Clica em uma aba via __doPostBack direto, bypassando event handlers bloqueantes."""
-    # Mapear nome da aba para o __doPostBack target
-    tab_targets = {
-        "Dados Básicos": "ctl00$Body$dlTab$ctl00$lbutMenu",
-        "Descrições": "ctl00$Body$dlTab$ctl01$lbutMenu",
-        "Conversão": "ctl00$Body$dlTab$ctl02$lbutMenu",
-        "Classificações": "ctl00$Body$dlTab$ctl03$lbutMenu",
-        "Referências": "ctl00$Body$dlTab$ctl04$lbutMenu",
-        "Fiscal": "ctl00$Body$dlTab$ctl05$lbutMenu",
-    }
-    target = tab_targets.get(tab_name)
-    if target:
-        await page.evaluate(f"""() => {{
-            window.confirm = () => true;
-            window.alert = () => {{}};
-            // __doPostBack bypassa form onsubmit validation (dirty state alerts)
-            document.getElementById('__EVENTTARGET').value = '{target}';
-            document.getElementById('__EVENTARGUMENT').value = '';
-            document.forms[0].submit();
-        }}""")
-    else:
-        # Fallback: click via tab link
-        await page.evaluate(f"""() => {{
+    """Clica em uma aba via JS com override de alert/confirm."""
+    await page.evaluate(
+        f"""() => {{
             window.confirm = () => true;
             window.alert = () => {{}};
             const tabs = document.querySelectorAll('a');
             const tab = Array.from(tabs).find(a => a.innerText.includes('{tab_name}'));
             if (tab) tab.click();
-        }}""")
+        }}"""
+    )
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(500)
     await hide_overlays(page)
