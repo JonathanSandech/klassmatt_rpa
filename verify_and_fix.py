@@ -592,7 +592,8 @@ async def verify_and_fix_sin(
                     log.warning(f"  validate_sap_description falhou: {sap_err}")
 
             # Salvar geral para limpar dirty state antes de navegar para PDM/Descrições
-            if (needs_reference or needs_relationship) and (has_pdm_in_excel or has_attrs_in_excel):
+            # (qualquer alteração — UNSPSC, NCM, Ref, etc — pode criar dirty state)
+            if has_pdm_in_excel or has_attrs_in_excel:
                 log.debug("  Salvando item para limpar dirty state...")
                 for save_attempt in range(3):
                     try:
