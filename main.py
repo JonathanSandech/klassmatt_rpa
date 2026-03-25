@@ -188,12 +188,7 @@ async def process_item(page, item: dict, wb) -> tuple[str, list[str]]:
         ref_ok = await fill_reference(page, str(item["empresa"]), str(item["part_number"]))
         t.mark("Referências")
         if not ref_ok:
-            color_row(wb, row, "duplicate")
-            save_excel(wb)
-            await navigate_home(page)
-            await navigate_to_worklist(page)
-            log.info(f"\n{t.summary()}")
-            return "duplicate", []
+            warnings.append("ref_not_saved")
     else:
         missing = []
         if not item.get("empresa"):

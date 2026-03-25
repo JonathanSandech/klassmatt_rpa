@@ -50,14 +50,33 @@ def _is_placeholder_ref(raw: str) -> bool:
 async def _select_autocomplete(page: Page, empresa: str) -> bool:
     """Tenta selecionar a empresa no autocomplete. Retorna True se selecionou."""
 
-    # 1. Match exato via texto
+    # 1. JS fallback — qualquer lista de autocomplete visível (mais confiável)
     try:
-        await page.locator(f"a:has-text('{empresa}')").first.click(timeout=3_000)
+        clicked = await page.evaluate(
+            """() => {
+                const lists = document.querySelectorAll('.ac_results, .ui-autocomplete, [id*="autocomplete"]');
+                for (const list of lists) {
+                    if (list.offsetParent !== null) {
+                        const items = list.querySelectorAll('li a, li');
+                        if (items.length > 0) { items[0].click(); return true; }
+                    }
+                }
+                return false;
+            }"""
+        )
+        if clicked:
+            return True
+    except Exception:
+        pass
+
+    # 2. Match exato via texto (case-insensitive)
+    try:
+        await page.locator(f"a:text-matches('{re.escape(empresa)}', 'i')").first.click(timeout=3_000)
         return True
     except Exception:
         pass
 
-    # 2. Qualquer item visível no autocomplete (jQuery UI, ac_results)
+    # 3. Qualquer item visível no autocomplete (jQuery UI, ac_results)
     for ac_sel in [
         ".ac_results li:first-child a",
         ".ac_results li:first-child",
@@ -72,29 +91,10 @@ async def _select_autocomplete(page: Page, empresa: str) -> bool:
         except Exception:
             continue
 
-    # 3. JS fallback — qualquer lista de autocomplete visível
-    try:
-        clicked = await page.evaluate(
-            """() => {
-                const lists = document.querySelectorAll('.ac_results, .ui-autocomplete, [id*="autocomplete"]');
-                for (const list of lists) {
-                    if (list.offsetParent !== null) {
-                        const items = list.querySelectorAll('li, a');
-                        if (items.length > 0) { items[0].click(); return true; }
-                    }
-                }
-                return false;
-            }"""
-        )
-        if clicked:
-            return True
-    except Exception:
-        pass
-
     # 4. Match parcial com primeira palavra
     first_word = empresa.split()[0] if empresa.split() else empresa
     try:
-        await page.locator(f"a:text-matches('{first_word}', 'i')").first.click(timeout=5_000)
+        await page.locator(f"a:text-matches('{re.escape(first_word)}', 'i')").first.click(timeout=5_000)
         return True
     except Exception:
         pass
@@ -145,6 +145,18 @@ async def _close_fabricante_tab_and_cancel_form(page: Page) -> None:
         await page.wait_for_timeout(1000)
     except Exception:
         pass
+
+
+async def _verify_ref_saved(page: Page, part_number: str) -> bool:
+    """Verifica se a referência foi realmente salva checando divReferencias."""
+    try:
+        ref_text = await page.evaluate("""() => {
+            const div = document.querySelector('#divReferencias');
+            return div ? div.innerText.trim() : '';
+        }""")
+        return part_number in ref_text
+    except Exception:
+        return False
 
 
 async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
@@ -199,8 +211,12 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(1000)
 
-    # Preencher empresa (digitar para acionar autocomplete)
-    await safe_fill(page, SELECTORS["ref_empresa_input"], str(empresa))
+    # Preencher empresa — usar press_sequentially para triggar autocomplete
+    # (page.fill substitui tudo de vez e não gera os eventos de keystroke)
+    empresa_input = page.locator(SELECTORS["ref_empresa_input"])
+    await empresa_input.click()
+    await empresa_input.fill("")  # limpar campo
+    await empresa_input.press_sequentially(str(empresa), delay=50)
     await page.wait_for_timeout(2000)
 
     # Selecionar empresa no autocomplete
@@ -211,8 +227,7 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     # Preencher Part Number
     await safe_fill(page, SELECTORS["ref_partnumber_input"], str(part_number))
 
-    # Salvar — o confirm dialog "Fabricante não existe, deseja cadastrá-lo?" é aceito
-    # automaticamente pelo handler global. Usar JS para evitar form intercept.
+    # Salvar referência via btnSalvar (botão do form de referência, NÃO o butSalvar do footer)
     await page.evaluate("""() => {
         const btn = document.querySelector('#btnSalvar');
         if (btn) btn.click();
@@ -224,7 +239,6 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     is_duplicate = await page_contains_text(page, SELECTORS["ref_duplicate_text"])
     if is_duplicate:
         log.warning(f"Referência duplicada detectada: {empresa} / {part_number}")
-        # Clicar Continuar se disponível
         try:
             await page.evaluate("""() => {
                 const btn = document.querySelector("input[value='Continuar']");
@@ -236,11 +250,13 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
             pass
         return False
 
-    # Após salvar com fabricante novo, o Klassmatt abre uma nova aba
-    # (FabricanteFornecManu.aspx) para cadastrar o fabricante.
-    # A referência JÁ é salva, mas o form de edição fica aberto (dirty state).
-    # Precisamos: 1) fechar a aba do fabricante, 2) clicar Cancelar no form.
+    # Fechar aba de fabricante se abriu + cancelar form se ainda aberto
     await _close_fabricante_tab_and_cancel_form(page)
 
-    log.info("Referência salva com sucesso")
-    return True
+    # Verificar se a referência realmente foi salva no Klassmatt
+    saved = await _verify_ref_saved(page, part_number)
+    if saved:
+        log.info("Referência salva com sucesso")
+    else:
+        log.warning(f"Referência NÃO salvou (part_number '{part_number}' não encontrado em divReferencias)")
+    return saved

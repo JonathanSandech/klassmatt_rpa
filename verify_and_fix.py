@@ -566,9 +566,13 @@ async def verify_and_fix_sin(
                     log.info(f"  ✓ NCM corrigido: {item['ncm']}")
 
                 if needs_reference and item.get("empresa") and item.get("part_number"):
-                    await fill_reference(item_page, str(item["empresa"]), str(item["part_number"]))
-                    result["fixed"].append("Referência")
-                    log.info(f"  ✓ Referência corrigida: {item['empresa']} / {item['part_number']}")
+                    ref_ok = await fill_reference(item_page, str(item["empresa"]), str(item["part_number"]))
+                    if ref_ok:
+                        result["fixed"].append("Referência")
+                        log.info(f"  ✓ Referência corrigida: {item['empresa']} / {item['part_number']}")
+                    else:
+                        result.setdefault("warnings", []).append("ref_not_saved")
+                        log.warning(f"  ✗ Referência NÃO salvou: {item['empresa']} / {item['part_number']}")
 
                 if needs_relationship and item.get("codigo_60"):
                     await fill_relationship(item_page, str(item["codigo_60"]))
