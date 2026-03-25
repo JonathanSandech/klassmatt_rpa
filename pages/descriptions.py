@@ -87,6 +87,8 @@ async def validate_sap_description(page: Page) -> None:
             # Salvar referência via JS
             await page.evaluate(
                 """() => {
+                    window.alert = () => {};
+                    window.confirm = () => true;
                     const btn = document.querySelector('#btnSalvar');
                     if (btn) btn.click();
                 }"""
@@ -118,14 +120,15 @@ async def validate_sap_description(page: Page) -> None:
                 except Exception:
                     continue
         else:
-            # Não mudou nada — cancelar edição da referência
-            # Override confirm para aceitar "alterações não salvas" automaticamente
+            # Não mudou nada — cancelar edição da referência para limpar dirty state
             await page.evaluate(
                 """() => {
                     window.confirm = () => true;
                     window.alert = () => {};
-                    // Clicar no botão Adicionar (iButAddRef) força sair do modo edição
-                    // Ou navegar via __doPostBack para Dados Básicos
+                    // Cancelar o form de edição da referência (limpa dirty state)
+                    const cancelar = document.querySelector('#btnCancelar');
+                    if (cancelar) { cancelar.click(); return; }
+                    // Fallback: navegar para Dados Básicos
                     const tabs = document.querySelectorAll('a');
                     const tab = Array.from(tabs).find(a => a.innerText.includes('Dados Básicos'));
                     if (tab) tab.click();
