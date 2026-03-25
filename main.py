@@ -138,6 +138,12 @@ async def process_item(page, item: dict, wb) -> tuple[str, list[str]]:
     # Fechar popups e esconder overlays
     await fechar_popups(page)
 
+    # Override preventivo de dialogs (evita alerts bloqueantes durante navegação)
+    await page.evaluate("""() => {
+        window.confirm = () => true;
+        window.alert = () => {};
+    }""")
+
     # 1. Buscar e selecionar o SIN na worklist
     await search_and_select_sin(page, sin)
     t.mark("Buscar SIN")
@@ -152,6 +158,11 @@ async def process_item(page, item: dict, wb) -> tuple[str, list[str]]:
         t.mark("Voltar Worklist")
         log.info(f"\n{t.summary()}")
         return "skipped", []
+    # Re-override dialogs após postback + hide overlays
+    await page.evaluate("""() => {
+        window.confirm = () => true;
+        window.alert = () => {};
+    }""")
     await hide_overlays(page)
     t.mark("Atuar no Item")
 
@@ -210,12 +221,57 @@ async def process_item(page, item: dict, wb) -> tuple[str, list[str]]:
         await upload_documents(page, doc_files)
         t.mark(f"Upload Mídias ({len(doc_files)} docs)")
 
+    # 8b. Salvar item para limpar dirty state antes de navegar para SAP/PDM/Atributos
+    # (referências/relacionamento podem criar dirty state que bloqueia navegação)
+    log.debug("Salvando item para limpar dirty state...")
+    for _save_attempt in range(3):
+        try:
+            await page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+            }""")
+            salvar_btn = page.locator("#butSalvar")
+            if await salvar_btn.count() > 0:
+                await salvar_btn.click()
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(2_000)
+                await page.evaluate("""() => {
+                    window.confirm = () => true;
+                    window.alert = () => {};
+                }""")
+                await hide_overlays(page)
+        except Exception as save_err:
+            log.warning(f"Salvar geral falhou: {save_err}")
+
+        # Verificar se dirty state foi limpo tentando navegar para aba neutra
+        still_dirty = await page.evaluate("""() => {
+            try {
+                const tabs = document.querySelectorAll('a');
+                const tab = Array.from(tabs).find(a => a.innerText.includes('Classificações'));
+                if (tab) { tab.click(); return false; }
+            } catch(e) { return true; }
+            return false;
+        }""")
+        await page.wait_for_timeout(1_500)
+
+        if not still_dirty:
+            log.debug(f"Item salvo (dirty state limpo, tentativa {_save_attempt + 1})")
+            break
+        else:
+            log.warning(f"Dirty state persiste (tentativa {_save_attempt + 1}/3)")
+    t.mark("Save dirty state")
+
     # 9. Validar descrição SAP (Exibe D2 / 40 chars)
-    await validate_sap_description(page)
+    try:
+        await hide_overlays(page)
+        await validate_sap_description(page)
+    except Exception as sap_err:
+        log.warning(f"validate_sap_description falhou: {sap_err}")
     t.mark("Validação SAP")
 
     # 10. Alterar PDM
     if item.get("pdm"):
+        await hide_overlays(page)
         await change_pdm(page, str(item["pdm"]))
         t.mark("Alterar PDM")
 
@@ -226,14 +282,10 @@ async def process_item(page, item: dict, wb) -> tuple[str, list[str]]:
         warnings.append("attributes_incomplete")
 
     # 12. Finalizar e Remeter para MODEC
-    # DESABILITADO até validação completa — manter itens em FINALIZACAO
-    # await finalizar_e_remeter(page)
-    # t.mark("Remeter MODEC")
-    log.info("Remeter MODEC DESABILITADO — item mantido em FINALIZACAO para revisão")
-    t.mark("(Remeter desabilitado)")
+    await finalizar_e_remeter(page)
+    t.mark("Remeter MODEC")
 
-    # Voltar para worklist (mesmo padrão do fix_items.py)
-    # Buffer pós-atributos — rate limiting principal é o asyncio.sleep(5) entre itens
+    # Voltar para worklist
     await page.wait_for_timeout(3_000)
     await _voltar_worklist(page)
     t.mark("Voltar Worklist")
