@@ -12,6 +12,8 @@ EXCEL_PATH = Path(os.getenv("EXCEL_PATH", r"C:\Users\sandechin\Downloads\Robo\BA
 DOCUMENTS_DIR = Path(os.getenv("DOCUMENTS_DIR", r"C:\Users\sandechin\Downloads\Robo\Documentos - André"))
 PROGRESS_FILE = BASE_DIR / "progress.json"
 LOG_FILE = BASE_DIR / "klassmatt_rpa.log"
+SHARED_DIR = Path(os.getenv("SHARED_DIR", r"\\WKS-TESTUSER5\Users\sandechin\Desktop\MODEC SHARED"))
+SHARED_LOG_FILE = SHARED_DIR / "klassmatt_rpa" / os.getenv("SHARED_LOG_NAME", "log_114.log")
 PROFILE_DIR = os.getenv("PROFILE_DIR", str(BASE_DIR / "playwright_profile"))
 
 # ── URLs ──
