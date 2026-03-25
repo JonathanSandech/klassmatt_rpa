@@ -452,11 +452,34 @@ async def verify_and_fix_sin(
         log.debug(f"  Página de edição: {item_page.url}")
 
         # ── Limpar dirty state residual (tentativas anteriores) ──
-        # Reload descarta ViewState sujo e carrega estado limpo do servidor.
-        # Sem isso, alerts de "Salve ou descarte as alterações" bloqueiam tudo.
+        # O dirty state vive no servidor (session), não no ViewState.
+        # Única forma de limpar: sair do item (descarta alterações) e reentrar.
         try:
-            await item_page.reload(wait_until="networkidle")
+            # Voltar para a SIN (descarta dirty state via confirm dialog)
+            await item_page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                __doPostBack('ctl00$Body$TopMenu1$dlmenu$ctl03$lbutopcao', '');
+            }""")
+            await item_page.wait_for_load_state("networkidle")
             await item_page.wait_for_timeout(1000)
+
+            # Reentrar no item (agora limpo)
+            await item_page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                __doPostBack('ctl00$Body$butAcao3', '');
+            }""")
+            await item_page.wait_for_load_state("networkidle")
+            await item_page.wait_for_timeout(1000)
+
+            # Detectar nova aba se abriu
+            for p in page.context.pages:
+                if p != worklist_page and p != item_page and "ITEM_Edita" in p.url:
+                    item_page = p
+                    await item_page.wait_for_load_state("networkidle")
+                    break
+
             await item_page.evaluate("""() => {
                 window.confirm = () => true;
                 window.alert = () => {};
