@@ -451,21 +451,11 @@ async def verify_and_fix_sin(
         await hide_overlays(item_page)
         log.debug(f"  Página de edição: {item_page.url}")
 
-        # ── Suprimir alerts bloqueantes via Playwright page.on('dialog') ──
-        # O dirty state das referências gera alerts que bloqueiam navegação.
-        # O window.alert override em evaluate é perdido entre postbacks.
-        # Solução: usar o handler de dialog do Playwright que intercepta a nível
-        # do protocolo CDP — persiste entre postbacks e aceita tudo silenciosamente.
-        async def _auto_accept_dialog(dialog):
-            log.debug(f"Dialog ({dialog.type}): {dialog.message[:80]}")
-            try:
-                await dialog.accept()
-            except Exception:
-                pass
-
-        # Remover handlers anteriores e adicionar o novo
-        item_page.remove_listener("dialog", _auto_accept_dialog)
-        item_page.on("dialog", _auto_accept_dialog)
+        # Override de dialogs (o handler global do browser.py já aceita automaticamente)
+        await item_page.evaluate("""() => {
+            window.confirm = () => true;
+            window.alert = () => {};
+        }""")
         await hide_overlays(item_page)
 
         # ── VERIFY: ler todos os campos ──
