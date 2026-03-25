@@ -123,9 +123,10 @@ async def _fill_fields(page: Page, codigo_60: str) -> None:
 
 
 async def _save(page: Page, codigo_60: str) -> None:
-    """Salva o relacionamento e verifica resultado."""
+    """Salva o relacionamento e commita no servidor."""
     _browser.last_dialog_message = ""
 
+    # Salvar via ibutUpdateRelac (salva no ViewState do form)
     await page.evaluate("""() => {
         const btn = document.querySelector('#ibutUpdateRelac');
         if (btn) btn.click();
@@ -136,8 +137,23 @@ async def _save(page: Page, codigo_60: str) -> None:
     last_msg = _browser.last_dialog_message.lower()
     if "já está relacionado" in last_msg or "already" in last_msg:
         log.info(f"Relacionamento já existia: {RELATIONSHIP_TYPE} / {codigo_60} — pulando")
-    else:
-        log.info(f"Relacionamento salvo: {RELATIONSHIP_TYPE} / {codigo_60}")
+        return
+
+    # Commitar no servidor via butSalvar do footer
+    # (sem isso o save fica só no ViewState e é descartado ao navegar)
+    try:
+        from browser import hide_overlays
+        await hide_overlays(page)
+        await page.evaluate("""() => {
+            const btn = document.querySelector('#butSalvar');
+            if (btn) btn.click();
+        }""")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(2000)
+    except Exception as e:
+        log.debug(f"  butSalvar (footer) após relacionamento falhou: {e}")
+
+    log.info(f"Relacionamento salvo: {RELATIONSHIP_TYPE} / {codigo_60}")
 
 
 async def fill_relationship(page: Page, codigo_60: str) -> None:
