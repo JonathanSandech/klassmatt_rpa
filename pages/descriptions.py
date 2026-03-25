@@ -164,39 +164,87 @@ async def change_pdm(page: Page, pdm: str) -> bool:
     """
     log.info(f"Alterando PDM para: {pdm}")
 
-    await _click_tab(page, "Descrições")
-    await page.wait_for_timeout(1000)
-
-    # Verificar se PDM já está definido (idempotente)
-    pdm_already_set = await page.evaluate(
-        """() => {
-            const links = document.querySelectorAll('a');
-            const editLink = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
-            // Se não há link "Editar Descrição" mas há conteúdo de descrição, PDM pode já estar set
-            const padrao = document.querySelector('#txtPadrao');
-            if (padrao && padrao.value && padrao.value !== '1') return true;
-            return false;
-        }"""
-    )
-
-    # Clicar em "Editar Descrição" via JS
+    # Se já estamos em DescricaoV3, pular direto para a verificação de PDM
     if "ITEM_Edita_DescricaoV3" not in page.url:
-        found = await page.evaluate(
-            """() => {
+        # Garantir que estamos em ITEM_Edita.aspx (não em SIN_Item_Resultante)
+        if "ITEM_Edita.aspx" not in page.url:
+            log.warning(f"change_pdm: URL inesperada {page.url} — tentando navegar para ITEM_Edita")
+            # Tentar clicar "Atuar no Item" se estamos no resumo da SIN
+            atuar = await page.evaluate("""() => {
+                const btn = document.querySelector("input[value='Atuar no Item']");
+                if (btn && !btn.disabled) { btn.click(); return true; }
+                return false;
+            }""")
+            if atuar:
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(1500)
+                await hide_overlays(page)
+
+        if "ITEM_Edita.aspx" in page.url:
+            # Navegar para aba Descrições via __doPostBack (mais confiável que tab.click)
+            await page.evaluate("""() => {
                 window.confirm = () => true;
                 window.alert = () => {};
+            }""")
+            await hide_overlays(page)
+            await page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                // Encontrar o __doPostBack correto para a aba Descrições
+                const tabs = document.querySelectorAll('a');
+                const tab = Array.from(tabs).find(a => {
+                    const text = a.innerText.trim();
+                    return text === 'Descrições' && a.href && a.href.includes('__doPostBack');
+                });
+                if (tab) tab.click();
+            }""")
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
+            await hide_overlays(page)
+
+            # Verificar se a aba Descrições realmente carregou (link "Editar Descrição" presente)
+            has_edit_link = await page.evaluate("""() => {
+                const links = document.querySelectorAll('a');
+                return !!Array.from(links).find(a => a.innerText.includes('Editar Descri'));
+            }""")
+            if not has_edit_link:
+                log.warning("Aba Descrições não carregou (link 'Editar Descrição' ausente) — retry via __doPostBack")
+                # Retry: usar __doPostBack direto para a aba Descrições (ctl01)
+                await page.evaluate("""() => {
+                    window.confirm = () => true;
+                    window.alert = () => {};
+                    __doPostBack('ctl00$Body$dlTab$ctl01$lbutMenu', '');
+                }""")
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(1000)
+                await hide_overlays(page)
+
+            # Clicar em "Editar Descrição" via __doPostBack direto
+            found = await page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                // Tentar via link com texto
                 const links = document.querySelectorAll('a');
                 const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
-                if (link) { link.click(); return true; }
-                return false;
-            }"""
-        )
-        if found:
-            await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(500)
-            await hide_overlays(page)
-        else:
-            log.warning("Link 'Editar Descrição' não encontrado — PDM pode já estar definido")
+                if (link) { link.click(); return 'link'; }
+                // Fallback: __doPostBack direto
+                try {
+                    __doPostBack('ctl00$Body$tabDescricoes$lbutAlterarDescr', '');
+                    return 'postback';
+                } catch(e) { return null; }
+            }""")
+            if found:
+                log.debug(f"Editar Descrição clicado via: {found}")
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(1000)
+                await hide_overlays(page)
+            else:
+                log.warning("Link 'Editar Descrição' não encontrado e __doPostBack falhou")
+                return False
+
+        # Verificar se chegamos em DescricaoV3
+        if "ITEM_Edita_DescricaoV3" not in page.url:
+            log.warning(f"Não navegou para DescricaoV3 (URL={page.url})")
             return False
 
     # Verificar se PDM já está definido de verdade.

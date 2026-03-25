@@ -708,27 +708,57 @@ async def verify_and_fix_sin(
                 await hide_overlays(item_page)
 
                 # Navegar para DescricaoV3
-                await item_page.evaluate("""() => {
-                    window.confirm = () => true;
-                    window.alert = () => {};
-                    // Navegar via tab click com overrides para bypass dirty state alerts
-                    const tabs = document.querySelectorAll('a');
-                    const tab = Array.from(tabs).find(a => a.innerText.includes('Descrições'));
-                    if (tab) tab.click();
-                }""")
-                await item_page.wait_for_load_state("networkidle")
-                await item_page.wait_for_timeout(1000)
-
                 if "ITEM_Edita_DescricaoV3" not in item_page.url:
+                    await hide_overlays(item_page)
                     await item_page.evaluate("""() => {
+                        window.confirm = () => true;
+                        window.alert = () => {};
+                        // Clicar aba Descrições (match exato para evitar "Padrões Descritivos")
+                        const tabs = document.querySelectorAll('a');
+                        const tab = Array.from(tabs).find(a => {
+                            const t = a.innerText.trim();
+                            return t === 'Descrições' && a.href && a.href.includes('__doPostBack');
+                        });
+                        if (tab) tab.click();
+                    }""")
+                    await item_page.wait_for_load_state("networkidle")
+                    await item_page.wait_for_timeout(1000)
+                    await hide_overlays(item_page)
+
+                    # Verificar se aba carregou (link "Editar Descrição" deve estar presente)
+                    has_edit = await item_page.evaluate("""() => {
+                        return !!Array.from(document.querySelectorAll('a')).find(
+                            a => a.innerText.includes('Editar Descri')
+                        );
+                    }""")
+                    if not has_edit:
+                        log.warning("  Aba Descrições não carregou — retry via __doPostBack direto")
+                        await item_page.evaluate("""() => {
+                            window.confirm = () => true;
+                            window.alert = () => {};
+                            __doPostBack('ctl00$Body$dlTab$ctl01$lbutMenu', '');
+                        }""")
+                        await item_page.wait_for_load_state("networkidle")
+                        await item_page.wait_for_timeout(1000)
+                        await hide_overlays(item_page)
+
+                    # Clicar "Editar Descrição"
+                    found_edit = await item_page.evaluate("""() => {
                         window.confirm = () => true;
                         window.alert = () => {};
                         const links = document.querySelectorAll('a');
                         const link = Array.from(links).find(a => a.innerText.includes('Editar Descri'));
-                        if (link) link.click();
+                        if (link) { link.click(); return true; }
+                        // Fallback: __doPostBack direto
+                        try {
+                            __doPostBack('ctl00$Body$tabDescricoes$lbutAlterarDescr', '');
+                            return true;
+                        } catch(e) { return false; }
                     }""")
-                    await item_page.wait_for_load_state("networkidle")
-                    await item_page.wait_for_timeout(1000)
+                    if found_edit:
+                        await item_page.wait_for_load_state("networkidle")
+                        await item_page.wait_for_timeout(1000)
+                        await hide_overlays(item_page)
 
                 if "ITEM_Edita_DescricaoV3" not in item_page.url:
                     log.warning(f"  Não conseguiu navegar para DescricaoV3 (URL={item_page.url})")
