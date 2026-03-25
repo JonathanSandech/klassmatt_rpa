@@ -451,19 +451,22 @@ async def verify_and_fix_sin(
         await hide_overlays(item_page)
         log.debug(f"  Página de edição: {item_page.url}")
 
-        # ── Limpar dirty state residual (tentativas anteriores) ──
-        # Reload descarta ViewState sujo e carrega estado limpo do servidor.
-        # Sem isso, alerts de "Salve ou descarte as alterações" bloqueiam tudo.
-        try:
-            await item_page.reload(wait_until="networkidle")
-            await item_page.wait_for_timeout(1000)
-            await item_page.evaluate("""() => {
-                window.confirm = () => true;
-                window.alert = () => {};
-            }""")
-            await hide_overlays(item_page)
-        except Exception:
-            pass
+        # ── Suprimir alerts bloqueantes via Playwright page.on('dialog') ──
+        # O dirty state das referências gera alerts que bloqueiam navegação.
+        # O window.alert override em evaluate é perdido entre postbacks.
+        # Solução: usar o handler de dialog do Playwright que intercepta a nível
+        # do protocolo CDP — persiste entre postbacks e aceita tudo silenciosamente.
+        async def _auto_accept_dialog(dialog):
+            log.debug(f"Dialog ({dialog.type}): {dialog.message[:80]}")
+            try:
+                await dialog.accept()
+            except Exception:
+                pass
+
+        # Remover handlers anteriores e adicionar o novo
+        item_page.remove_listener("dialog", _auto_accept_dialog)
+        item_page.on("dialog", _auto_accept_dialog)
+        await hide_overlays(item_page)
 
         # ── VERIFY: ler todos os campos ──
 
@@ -718,6 +721,7 @@ async def verify_and_fix_sin(
                 await item_page.evaluate("""() => {
                     window.confirm = () => true;
                     window.alert = () => {};
+                    // Navegar via tab click com overrides para bypass dirty state alerts
                     const tabs = document.querySelectorAll('a');
                     const tab = Array.from(tabs).find(a => a.innerText.includes('Descrições'));
                     if (tab) tab.click();
