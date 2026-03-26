@@ -53,39 +53,80 @@ async def _select_autocomplete(page: Page, empresa: str) -> bool:
     IMPORTANTE: usar Playwright click (não JS click) para que o Klassmatt
     execute o href javascript:sel(N) que seta o hidden field do fabricante.
     JS el.click() não trigga os event handlers do ASP.NET corretamente.
+
+    Busca o melhor match entre as opções visíveis no autocomplete:
+    1. Match exato (case-insensitive)
+    2. Opção que contém a primeira palavra da empresa
+    3. Primeiro item disponível
     """
+    empresa_upper = empresa.upper().strip()
+    first_word = empresa.split()[0].upper() if empresa.split() else empresa_upper
 
-    # 1. Primeiro item visível no autocomplete (Playwright click)
-    for ac_sel in [
-        "ul li:first-child a[href*='sel(']",
-        "ul li:first-child a",
-        ".ac_results li:first-child a",
-        ".ui-autocomplete li:first-child a",
-    ]:
+    # Ler todas as opções visíveis no autocomplete via JS
+    options = await page.evaluate("""() => {
+        const items = document.querySelectorAll('ul li a[href*="sel("]');
+        if (items.length === 0) return [];
+        return Array.from(items).map((a, i) => ({
+            text: a.textContent.trim(),
+            index: i
+        }));
+    }""")
+
+    if not options:
+        # Fallback: tentar seletores alternativos para o primeiro item
+        for ac_sel in [
+            "ul li:first-child a[href*='sel(']",
+            "ul li:first-child a",
+            ".ac_results li:first-child a",
+        ]:
+            try:
+                el = page.locator(ac_sel).first
+                if await el.count() > 0 and await el.is_visible(timeout=1_000):
+                    await el.click(timeout=3_000)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    log.debug(f"  Autocomplete: {len(options)} opções — {[o['text'] for o in options[:5]]}")
+
+    # Escolher o melhor match
+    best = None
+    # 1. Match exato
+    for opt in options:
+        if opt["text"].upper() == empresa_upper:
+            best = opt
+            break
+    # 2. Opção que começa com a primeira palavra
+    if not best:
+        for opt in options:
+            if opt["text"].upper().startswith(first_word):
+                best = opt
+                break
+    # 3. Opção que contém a primeira palavra
+    if not best:
+        for opt in options:
+            if first_word in opt["text"].upper():
+                best = opt
+                break
+    # 4. Primeiro item disponível
+    if not best:
+        best = options[0]
+
+    log.debug(f"  Autocomplete: selecionando '{best['text']}' (empresa='{empresa}')")
+
+    # Clicar via Playwright (necessário para o javascript:sel(N) funcionar)
+    try:
+        ac_links = page.locator("ul li a[href*='sel(']")
+        await ac_links.nth(best["index"]).click(timeout=3_000)
+        return True
+    except Exception:
+        # Fallback: clicar no primeiro item
         try:
-            el = page.locator(ac_sel).first
-            if await el.count() > 0 and await el.is_visible(timeout=1_000):
-                await el.click(timeout=3_000)
-                return True
+            await ac_links.first.click(timeout=3_000)
+            return True
         except Exception:
-            continue
-
-    # 2. Match exato via texto (case-insensitive, Playwright click)
-    try:
-        await page.locator(f"a:text-matches('{re.escape(empresa)}', 'i')").first.click(timeout=3_000)
-        return True
-    except Exception:
-        pass
-
-    # 3. Match parcial com primeira palavra
-    first_word = empresa.split()[0] if empresa.split() else empresa
-    try:
-        await page.locator(f"a:text-matches('{re.escape(first_word)}', 'i')").first.click(timeout=5_000)
-        return True
-    except Exception:
-        pass
-
-    return False
+            return False
 
 
 async def _close_fabricante_tab_and_cancel_form(page: Page) -> None:
@@ -194,8 +235,9 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(1000)
 
-    # Preencher empresa — usar press_sequentially para triggar autocomplete
-    # (page.fill substitui tudo de vez e não gera os eventos de keystroke)
+    # Preencher empresa — digitar só a PRIMEIRA PALAVRA para manter o autocomplete aberto.
+    # Ex: "GALPERTI ENGINEERING" → digita "GALPERTI", autocomplete mostra "GALPERTI" → seleciona.
+    # Se digitar o nome inteiro, o autocomplete filtra demais e some o match parcial.
     # Triple-click+delete via JS para limpar campo corretamente (el.value='' não limpa binding)
     # Depois focus via JS para evitar intercept do aspnetForm overlay
     await page.evaluate("""() => {
@@ -205,10 +247,10 @@ async def fill_reference(page: Page, empresa: str, part_number: str) -> bool:
     await page.keyboard.press("Delete")
     await page.wait_for_timeout(300)
     empresa_input = page.locator(SELECTORS["ref_empresa_input"])
-    await empresa_input.press_sequentially(str(empresa), delay=50)
-    # Log o valor real após digitação
+    first_word = str(empresa).split()[0] if str(empresa).split() else str(empresa)
+    await empresa_input.press_sequentially(first_word, delay=50)
     typed_value = await page.evaluate("() => document.querySelector('#txtNome')?.value || ''")
-    log.debug(f"  Após press_sequentially: txtNome='{typed_value}' (esperado='{empresa}')")
+    log.debug(f"  Após press_sequentially: txtNome='{typed_value}' (primeira palavra de '{empresa}')")
     await page.wait_for_timeout(2000)
 
     # Selecionar empresa no autocomplete

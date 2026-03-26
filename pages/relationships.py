@@ -43,9 +43,42 @@ async def _get_existing_relationships(page: Page) -> list[dict]:
 
 
 async def _navigate_to_tab(page: Page) -> None:
-    """Navega para aba Relacionamentos com retry."""
+    """Navega para aba Relacionamentos com retry.
+
+    Tentativa 1: safe_click normal (funciona quando a página está limpa).
+    Tentativa 2: limpa dirty state do form de referências + safe_click.
+    Tentativa 3: __doPostBack direto (bypassa bloqueio de dirty form do ASP.NET).
+
+    Se a página não é ITEM_Edita.aspx, falha imediatamente (o retry do
+    process_item_with_retry vai navegar de volta e recomeçar).
+    """
+    # Verificar se estamos na página correta antes de tentar clicar nas abas
+    if "ITEM_Edita.aspx" not in page.url:
+        raise RuntimeError(
+            f"Página errada para aba Relacionamentos: {page.url} "
+            f"(esperado ITEM_Edita.aspx)"
+        )
+
     for tab_attempt in range(3):
-        await safe_click(page, SELECTORS["tab_relacionamentos"])
+        if tab_attempt >= 1:
+            # Limpar dirty state que pode estar bloqueando navegação entre abas
+            # (ex: form de referência aberto/descartado deixa ASP.NET em dirty state)
+            await page.evaluate("""() => {
+                window.alert = () => {};
+                window.confirm = () => true;
+            }""")
+        if tab_attempt < 2:
+            try:
+                await safe_click(page, SELECTORS["tab_relacionamentos"])
+            except Exception:
+                log.debug(f"Aba Relacionamentos: safe_click falhou (tentativa {tab_attempt + 1}/3)")
+                continue
+        else:
+            # Fallback: __doPostBack bypassa bloqueio de dirty form
+            log.debug("Aba Relacionamentos: usando __doPostBack como fallback")
+            await page.evaluate("""() => {
+                __doPostBack('ctl00$Body$dlTab$ctl08$lbutMenu', '');
+            }""")
         await page.wait_for_load_state("networkidle")
         await page.wait_for_timeout(1000)
 
