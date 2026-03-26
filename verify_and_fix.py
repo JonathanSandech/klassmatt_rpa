@@ -172,6 +172,15 @@ async def _navigate_to_worklist(page):
 
 async def _search_and_open_sin(page, sin: str):
     """Busca SIN na worklist e abre. Retorna a page do item (pode ser nova aba)."""
+    # Garantir que estamos na worklist antes de buscar
+    ready = await page.evaluate("() => typeof pesquisar === 'function'")
+    if not ready:
+        log.warning("pesquisar() indisponível — tentando navegar para worklist")
+        await _navigate_to_worklist(page)
+        ready = await page.evaluate("() => typeof pesquisar === 'function'")
+        if not ready:
+            raise RuntimeError("Não está na worklist e não conseguiu navegar — pesquisar() indisponível")
+
     await page.evaluate(f"""() => {{
         const ta = document.querySelector("textarea[name$='txtValor']");
         if (ta) ta.value = '{sin}';
@@ -211,7 +220,20 @@ async def _get_status(page) -> str:
 
 
 async def _voltar_worklist(page):
-    """Volta para a worklist navegando via Principal."""
+    """Volta para a worklist navegando via Principal.
+
+    Raises RuntimeError se não conseguir chegar na worklist com pesquisar() disponível.
+    """
+    # Verificar se já estamos na worklist
+    ready = await page.evaluate("() => typeof pesquisar === 'function'")
+    if ready:
+        return
+
+    # Verificar página de erro antes de navegar
+    if await _check_page_error(page):
+        raise RuntimeError("Página de erro detectada — precisa reiniciar browser")
+
+    # Principal
     await page.evaluate("""() => {
         const links = document.querySelectorAll('a');
         const p = Array.from(links).find(a => a.innerText.trim() === 'Principal');
@@ -220,6 +242,10 @@ async def _voltar_worklist(page):
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
 
+    if await _check_page_error(page):
+        raise RuntimeError("Página de erro após navegar para Principal")
+
+    # Worklist
     await page.evaluate("""() => {
         const links = document.querySelectorAll('a');
         const wl = Array.from(links).find(a => a.innerText.includes('Acompanhamento das Solicita'));
@@ -227,6 +253,11 @@ async def _voltar_worklist(page):
     }""")
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
+
+    # Verificar que pesquisar() existe — se não, worklist não carregou
+    ready = await page.evaluate("() => typeof pesquisar === 'function'")
+    if not ready:
+        raise RuntimeError("Worklist não carregou — pesquisar() indisponível")
 
     try:
         await page.select_option(
@@ -236,8 +267,8 @@ async def _voltar_worklist(page):
         await page.evaluate("() => { pesquisar(0, ''); }")
         await page.wait_for_load_state("networkidle")
         await page.wait_for_timeout(3000)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Erro ao filtrar worklist: {e}")
 
 
 async def _retornar_etapa(page) -> bool:
