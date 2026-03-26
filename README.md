@@ -115,7 +115,47 @@ A planilha deve conter as seguintes colunas (configuráveis em `config.py`):
 # Cadastro em massa (fluxo principal)
 python main.py
 
-# Corrigir NCM em itens já processados (Retornar Etapa → NCM → Remeter)
+# Com auto-restart em caso de crash (recomendado para produção)
+run_main.bat
+```
+
+### Verificação e correção
+
+```bash
+# Verificar e corrigir todos os SINs da planilha
+python verify_and_fix.py
+
+# Apenas verificar (sem corrigir)
+python verify_and_fix.py --verify-only
+
+# SINs específicos
+python verify_and_fix.py 478654 478655
+
+# SINs de um arquivo
+python verify_and_fix.py --file=lista.txt
+
+# Re-processar apenas os divergentes do último report
+python verify_and_fix.py --only-divergent
+
+# Com auto-restart (passa argumentos automaticamente)
+run_verify.bat --verify-only
+run_verify.bat 478654
+```
+
+### Scripts de segurança (.bat)
+
+Os arquivos `run_main.bat` e `run_verify.bat` são wrappers que:
+- Matam todos os processos chrome/chromium antes de cada execução
+- Reiniciam o script automaticamente em caso de crash
+- Suportam até 100 restarts com delay de 15s entre cada
+- `run_verify.bat` repassa todos os argumentos para o `verify_and_fix.py`
+
+Use-os para execuções desassistidas em produção.
+
+### Corrigir NCM retroativamente
+
+```bash
+# Fix NCM em itens já processados (Retornar Etapa → NCM → Remeter)
 python fix_ncm.py
 ```
 
@@ -132,6 +172,9 @@ Se o processo for interrompido, basta executar novamente. O bot lê o `progress.
 ```
 klassmatt_rpa/
 ├── main.py              # Orquestrador principal (5s delay entre itens)
+├── verify_and_fix.py    # Verifica e corrige SINs (verify + fix em uma passagem)
+├── run_main.bat         # Wrapper com auto-restart para main.py
+├── run_verify.bat       # Wrapper com auto-restart para verify_and_fix.py
 ├── config.py            # Configurações, caminhos, seletores
 ├── browser.py           # Setup do Playwright, safe_click com JS fallback, hide_overlays
 ├── fix_ncm.py           # Script para corrigir NCM em itens já processados

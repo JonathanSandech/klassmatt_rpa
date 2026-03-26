@@ -35,14 +35,33 @@ All VMs read/write to a shared network folder:
 pip install -r requirements.txt
 python -m playwright install chromium
 
-# Run the bot
+# Run the bot (direct)
 python main.py
+
+# Run with auto-restart on crash (recommended for production)
+run_main.bat
+
+# Verify and fix items
+python verify_and_fix.py                         # todos os SINs da planilha
+python verify_and_fix.py 474284 474291           # SINs específicos
+python verify_and_fix.py --file=lista.txt        # SINs de um arquivo
+python verify_and_fix.py --only-divergent        # re-processa divergentes do report
+python verify_and_fix.py --verify-only           # só verifica, não corrige
+
+# Run verify with auto-restart on crash (passes all args through)
+run_verify.bat                                   # verify+fix all
+run_verify.bat --verify-only                     # verify only
+run_verify.bat 478654                            # specific SINs
 
 # Fix NCM on already-processed items (Retornar Etapa → NCM → Remeter)
 python fix_ncm.py
 ```
 
 First run requires manual login in the browser window; the session is saved to `./playwright_profile/`. On subsequent runs, the bot resumes from `progress.json`, skipping items with status "ok".
+
+### Safety wrappers (`run_main.bat` / `run_verify.bat`)
+
+Both `.bat` files kill all chrome/chromium processes before each run and auto-restart the script on crash (up to 100 restarts, 15s delay between each). Use these for unattended production runs. `run_verify.bat` passes all CLI arguments through to `verify_and_fix.py`.
 
 There are no automated tests.
 
