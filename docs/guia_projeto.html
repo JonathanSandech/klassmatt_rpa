@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Klassmatt RPA — Guia do Projeto</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232733;
+    --border: #2e3345;
+    --text: #e1e4ed;
+    --text2: #8b90a0;
+    --accent: #6c7ee1;
+    --accent2: #4e5bb8;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --orange: #fb923c;
+    --blue: #60a5fa;
+    --purple: #a78bfa;
+    --cyan: #22d3ee;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 0;
+  }
+  /* NAV */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(15,17,23,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    display: flex; align-items: center; gap: 1.5rem;
+    height: 56px;
+  }
+  nav .logo { font-weight: 700; font-size: 1.1rem; color: var(--accent); white-space: nowrap; }
+  nav a {
+    color: var(--text2); text-decoration: none; font-size: 0.85rem;
+    transition: color 0.2s;
+  }
+  nav a:hover { color: var(--text); }
+  /* HERO */
+  .hero {
+    margin-top: 56px;
+    padding: 4rem 2rem 3rem;
+    text-align: center;
+    background: linear-gradient(180deg, #181b26 0%, var(--bg) 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  .hero h1 { font-size: 2.4rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .hero h1 span { color: var(--accent); }
+  .hero p { color: var(--text2); font-size: 1.1rem; max-width: 700px; margin: 0 auto; }
+  /* CONTAINER */
+  .container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+  /* SECTION */
+  section { margin-bottom: 3rem; }
+  section > h2 {
+    font-size: 1.5rem; font-weight: 700;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--accent);
+    display: inline-block;
+  }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.75rem; color: var(--blue); }
+  /* CARDS */
+  .card-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    transition: border-color 0.2s, transform 0.15s;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card .tag {
+    display: inline-block;
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 0.2rem 0.6rem; border-radius: 999px;
+    margin-bottom: 0.5rem;
+  }
+  .card h4 { font-size: 1rem; margin-bottom: 0.4rem; }
+  .card p { font-size: 0.88rem; color: var(--text2); }
+  .tag-page { background: rgba(108,126,225,0.15); color: var(--accent); }
+  .tag-core { background: rgba(52,211,153,0.15); color: var(--green); }
+  .tag-util { background: rgba(167,139,250,0.15); color: var(--purple); }
+  /* FLOW */
+  .flow {
+    display: flex; flex-direction: column; gap: 0;
+    position: relative;
+    padding-left: 2.5rem;
+  }
+  .flow::before {
+    content: '';
+    position: absolute; left: 15px; top: 0; bottom: 0;
+    width: 2px; background: var(--border);
+  }
+  .flow-step {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+    transition: border-color 0.2s;
+  }
+  .flow-step:hover { border-color: var(--accent); }
+  .flow-step::before {
+    content: attr(data-step);
+    position: absolute; left: -2.5rem; top: 1rem;
+    width: 28px; height: 28px;
+    background: var(--accent2);
+    color: #fff; font-size: 0.75rem; font-weight: 700;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1;
+  }
+  .flow-step .step-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.3rem; }
+  .flow-step .step-file { font-size: 0.78rem; color: var(--purple); font-family: monospace; }
+  .flow-step .step-desc { font-size: 0.85rem; color: var(--text2); margin-top: 0.3rem; }
+  /* PIPELINE */
+  .pipeline {
+    display: flex; align-items: stretch; gap: 0;
+    overflow-x: auto; padding: 1rem 0;
+  }
+  .pipe-node {
+    flex: 0 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.5rem;
+    text-align: center;
+    min-width: 160px;
+    position: relative;
+  }
+  .pipe-node.active { border-color: var(--green); box-shadow: 0 0 20px rgba(52,211,153,0.15); }
+  .pipe-arrow {
+    flex: 0 0 40px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text2); font-size: 1.5rem;
+  }
+  .pipe-node .pipe-vm { font-size: 0.75rem; color: var(--text2); }
+  .pipe-node .pipe-label { font-weight: 600; font-size: 0.9rem; margin-top: 0.25rem; }
+  /* STATUS TABLE */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    margin: 1rem 0;
+  }
+  th, td {
+    padding: 0.6rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  th { color: var(--text2); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  tr:hover td { background: rgba(108,126,225,0.05); }
+  .badge {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+  .badge-ok { background: rgba(52,211,153,0.15); color: var(--green); }
+  .badge-error { background: rgba(248,113,113,0.15); color: var(--red); }
+  .badge-review { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .badge-skip { background: rgba(139,144,160,0.15); color: var(--text2); }
+  .badge-fix { background: rgba(96,165,250,0.15); color: var(--blue); }
+  .badge-partial { background: rgba(251,146,60,0.15); color: var(--orange); }
+  .badge-div { background: rgba(167,139,250,0.15); color: var(--purple); }
+  /* DIAGRAM */
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+    overflow-x: auto;
+  }
+  .status-flow {
+    display: flex; flex-wrap: wrap; gap: 0.5rem 0;
+    align-items: center; justify-content: center;
+  }
+  .sf-node {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-weight: 600; font-size: 0.85rem;
+    text-align: center;
+    min-width: 120px;
+  }
+  .sf-arrow { color: var(--text2); font-size: 1.2rem; padding: 0 0.5rem; }
+  /* CODE */
+  code, .mono {
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.85em;
+    background: var(--surface2);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.7;
+    margin: 1rem 0;
+  }
+  /* CALLOUT */
+  .callout {
+    border-left: 3px solid;
+    padding: 1rem 1.25rem;
+    border-radius: 0 8px 8px 0;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  .callout-warn { border-color: var(--yellow); background: rgba(251,191,36,0.06); }
+  .callout-info { border-color: var(--blue); background: rgba(96,165,250,0.06); }
+  .callout-danger { border-color: var(--red); background: rgba(248,113,113,0.06); }
+  .callout-title { font-weight: 700; margin-bottom: 0.3rem; }
+  /* STATS ROW */
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1rem; margin: 1.5rem 0;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    text-align: center;
+  }
+  .stat .num { font-size: 2rem; font-weight: 700; }
+  .stat .label { font-size: 0.78rem; color: var(--text2); margin-top: 0.2rem; }
+  /* TABS */
+  .tab-bar { display: flex; gap: 0; margin-bottom: -1px; position: relative; z-index: 1; }
+  .tab-btn {
+    padding: 0.6rem 1.2rem;
+    background: transparent; border: 1px solid transparent;
+    color: var(--text2); cursor: pointer; font-size: 0.85rem;
+    border-radius: 8px 8px 0 0;
+    transition: all 0.2s;
+  }
+  .tab-btn.active {
+    background: var(--surface);
+    border-color: var(--border);
+    border-bottom-color: var(--surface);
+    color: var(--text);
+  }
+  .tab-content {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0 8px 8px 8px;
+    padding: 1.5rem;
+    display: none;
+  }
+  .tab-content.active { display: block; }
+  /* RESPONSIVE */
+  @media (max-width: 700px) {
+    .pipeline { flex-direction: column; align-items: stretch; }
+    .pipe-arrow { transform: rotate(90deg); }
+    .hero h1 { font-size: 1.6rem; }
+    .container { padding: 1rem; }
+  }
+  .fade-in { animation: fadeIn 0.5s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { margin: 0.5rem 0 0.5rem 1.5rem; }
+  li { margin-bottom: 0.3rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">Klassmatt RPA</div>
+  <a href="#visao-geral">Visao Geral</a>
+  <a href="#pipeline">Pipeline</a>
+  <a href="#fluxo-item">Fluxo por Item</a>
+  <a href="#arquivos">Arquivos</a>
+  <a href="#status">Status</a>
+  <a href="#verify">Verify & Fix</a>
+  <a href="#armadilhas">Armadilhas</a>
+  <a href="#comandos">Comandos</a>
+</nav>
+
+<!-- HERO -->
+<div class="hero fade-in">
+  <h1>Guia do Projeto <span>Klassmatt RPA</span></h1>
+  <p>Bot de automacao para cadastro em massa de itens no sistema Klassmatt MODEC (ASP.NET). Migrado de Power Automate Desktop para Python + Playwright.</p>
+</div>
+
+<div class="container">
+
+<!-- ============================================ -->
+<section id="visao-geral">
+  <h2>Visao Geral</h2>
+  <p>O Klassmatt e o sistema web da MODEC para catalogacao de itens (pecas, equipamentos, materiais). Este bot automatiza o preenchimento de 12+ campos por item, incluindo classificacoes, dados fiscais, referencias, documentos e atributos tecnicos.</p>
+
+  <div class="stats">
+    <div class="stat"><div class="num" style="color:var(--accent)">1.009</div><div class="label">SINs verificados</div></div>
+    <div class="stat"><div class="num" style="color:var(--green)">601</div><div class="label">OK + Corrigidos</div></div>
+    <div class="stat"><div class="num" style="color:var(--red)">285</div><div class="label">Fix Failed</div></div>
+    <div class="stat"><div class="num" style="color:var(--orange)">88</div><div class="label">Parciais</div></div>
+    <div class="stat"><div class="num" style="color:var(--purple)">18</div><div class="label">Divergentes</div></div>
+    <div class="stat"><div class="num" style="color:var(--yellow)">17</div><div class="label">Erros</div></div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-title">O que e um SIN?</div>
+    SIN = Solicitacao de Inclusao de Novo item. Cada linha da planilha Excel e um SIN com um numero unico (ex: 474726). O bot abre cada SIN no Klassmatt e preenche os dados.
+  </div>
+</section>
+
+<!-- ============================================ -->
+<section id="pipeline">
+  <h2>Pipeline Multi-VM</h2>
+  <p>O cadastro completo roda em <strong>4 VMs em paralelo</strong>, cada uma fazendo uma etapa diferente. Este bot (VM .110) faz a <strong>etapa final</strong>.</p>
+
+  <div class="pipeline" style="margin-top:1.5rem">
+    <div class="pipe-node">
+      <div class="pipe-vm">VM .111</div>
+      <div class="pipe-label">Download de Docs</div>
+      <div style="font-size:0.78rem;color:var(--text2);margin-top:0.3rem">Baixa PDFs do sistema</div>
+    </div>
+    <div class="pipe-arrow">&#8594;</div>
+    <div class="pipe-node">
+      <div class="pipe-vm">VM .112</div>
+      <div class="pipe-label">Processamento</div>
+      <div style="font-size:0.78rem;color:var(--text2);margin-top:0.3rem">Processa dados dos docs</div>
+    </div>
+    <div class="pipe-arrow">&#8594;</div>
+    <div class="pipe-node">
+      <div class="pipe-vm">VM .113</div>
+      <div class="pipe-label">Preparacao</div>
+      <div style="font-size:0.78rem;color:var(--text2);margin-top:0.3rem">Prepara planilha final</div>
+    </div>
+    <div class="pipe-arrow">&#8594;</div>
+    <div class="pipe-node active">
+      <div class="pipe-vm">VM .110 (este bot)</div>
+      <div class="pipe-label">Cadastro Klassmatt</div>
+      <div style="font-size:0.78rem;color:var(--green);margin-top:0.3rem">Preenche os dados no sistema web</div>
+    </div>
+  </div>
+
+  <h3>Pasta Compartilhada</h3>
+  <pre>\\WKS-TESTUSER5\Users\sandechin\Desktop\MODEC SHARED\
+  downloads/                          &larr; PDFs baixados pelas VMs upstream
+  documentos_baixados_&lt;VM&gt;.xlsx       &larr; Manifesto de downloads por VM
+  ptC_resultado_&lt;VM&gt;.xlsx             &larr; Resultados de processamento por VM
+  klassmatt_rpa/log_110.log           &larr; Log deste bot na rede</pre>
+</section>
+
+<!-- ============================================ -->
+<section id="fluxo-item">
+  <h2>Fluxo de Processamento por Item</h2>
+  <p>Para cada SIN da planilha Excel, o bot executa estes passos em sequencia:</p>
+
+  <div class="flow" style="margin-top:1.5rem">
+
+    <div class="flow-step" data-step="1">
+      <div class="step-title">Buscar SIN na Worklist</div>
+      <div class="step-file">pages/worklist.py + pages/item.py</div>
+      <div class="step-desc">Navega ate a Worklist, aplica filtro "Todas as Solicitacoes", busca o numero do SIN no grid de resultados (<code>#DIVResultado</code>).</div>
+    </div>
+
+    <div class="flow-step" data-step="2">
+      <div class="step-title">Atuar no Item / Criar Item</div>
+      <div class="step-file">pages/item.py</div>
+      <div class="step-desc">Clica "Atuar no Item" para abrir o formulario. Se o item ainda nao existe, clica "Criar Item" &rarr; "Finalizar" &rarr; "Salvar" &rarr; "Sim". Verifica se o status e FINALIZACAO &mdash; se nao for, <strong>pula o item</strong>.</div>
+    </div>
+
+    <div class="flow-step" data-step="3">
+      <div class="step-title">UNSPSC (Classificacao)</div>
+      <div class="step-file">pages/classifications.py</div>
+      <div class="step-desc">Abre a aba Classificacoes, clica no botao UNSPSC (<code>#ibutUNSPSC</code>), preenche o codigo no popup, pesquisa, seleciona o resultado e salva. Se o codigo nao existir na base, loga warning.</div>
+    </div>
+
+    <div class="flow-step" data-step="4">
+      <div class="step-title">NCM/TIPI (Fiscal)</div>
+      <div class="step-file">pages/fiscal.py</div>
+      <div class="step-desc">Abre a aba Fiscal, formata o NCM de <code>73181500</code> para <code>7318.15.00</code>, preenche o campo <code>#txtNCMTIPI</code>, pressiona Tab para validar. Se o Klassmatt rejeitar, limpa o campo e loga warning.</div>
+    </div>
+
+    <div class="flow-step" data-step="5">
+      <div class="step-title">Referencia (Empresa + Part Number)</div>
+      <div class="step-file">pages/references.py</div>
+      <div class="step-desc">Abre a aba Referencias. Verifica se ja existe referencia. Se nao, clica <code>#iButAddRef</code> para adicionar, preenche empresa (com autocomplete) e part number, salva. Trata warning de "Referencia igual".</div>
+    </div>
+
+    <div class="flow-step" data-step="6">
+      <div class="step-title">Relacionamento (Codigo Antigo)</div>
+      <div class="step-file">pages/relationships.py</div>
+      <div class="step-desc">Abre a aba Relacionamentos. Adiciona relacao tipo "CODIGO ANTIGO" com status "ATIVO ERP" e comentario "ZBRA". Verifica duplicatas antes de inserir.</div>
+    </div>
+
+    <div class="flow-step" data-step="7">
+      <div class="step-title">Upload de Midias (Documentos PDF)</div>
+      <div class="step-file">pages/media.py</div>
+      <div class="step-desc">Abre a aba Midias (abre em <strong>nova aba do browser</strong>). Para cada documento: clica "Adicionar Midia", faz upload do arquivo, preenche titulo e salva. Problema conhecido: link "Adicionar Midia" desaparece apos 5+ uploads consecutivos.</div>
+    </div>
+
+    <div class="flow-step" data-step="8">
+      <div class="step-title">Salvar Estado</div>
+      <div class="step-file">pages/references.py (butSalvar)</div>
+      <div class="step-desc">Persiste as alteracoes de referencias/relacionamentos clicando <code>butSalvar</code>. Testa navegacao para confirmar que o dirty state foi limpo.</div>
+    </div>
+
+    <div class="flow-step" data-step="9">
+      <div class="step-title">Validacao SAP (Descricao)</div>
+      <div class="step-file">pages/descriptions.py</div>
+      <div class="step-desc">Verifica se a descricao SAP tem mais de 40 caracteres. Se sim, desmarca "Exibe D2" na referencia para nao mostrar descricao longa.</div>
+    </div>
+
+    <div class="flow-step" data-step="10">
+      <div class="step-title">Alterar PDM (Padrao de Material)</div>
+      <div class="step-file">pages/descriptions.py</div>
+      <div class="step-desc">Navega para Descricoes &rarr; Editar Descricao (DescricaoV3.aspx). Pesquisa o codigo PDM, seleciona a categoria e clica "Definir Padrao". Isso habilita a tabela de atributos tecnicos.</div>
+    </div>
+
+    <div class="flow-step" data-step="11">
+      <div class="step-title">Preencher Atributos Tecnicos</div>
+      <div class="step-file">pages/attributes.py</div>
+      <div class="step-desc">Na pagina DescricaoV3, percorre a tabela <code>dgDadosTecnicos</code>. Para cada atributo: se "N/A" marca o checkbox, senao abre o popup da arvore taxonomica (<code>Dt_EditaArvore.aspx</code>), navega pela letra do alfabeto e seleciona o valor. Clica "Finalizar" para salvar tudo.</div>
+    </div>
+
+    <div class="flow-step" data-step="12">
+      <div class="step-title">Voltar para Worklist</div>
+      <div class="step-file">browser.py + pages/worklist.py</div>
+      <div class="step-desc">Navega de volta: Principal &rarr; Worklist &rarr; Re-aplica filtro. Espera <code>pesquisar()</code> estar disponivel antes de processar o proximo SIN. Delay de 5s entre itens.</div>
+    </div>
+
+  </div>
+
+  <div class="callout callout-warn" style="margin-top:1.5rem">
+    <div class="callout-title">Retry Logic</div>
+    Se algum passo falha, o bot tenta ate <strong>3 vezes</strong> com backoff. Se a sessao expirar (<code>KlassmattSessionError</code>), reinicia o browser inteiro. O progresso e salvo em <code>progress.json</code> a cada item.
+  </div>
+</section>
+
+<!-- ============================================ -->
+<section id="arquivos">
+  <h2>Estrutura de Arquivos</h2>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="tag tag-core">Core</div>
+      <h4>main.py</h4>
+      <p>Orquestrador principal. Carrega Excel, itera SINs, chama os page objects em sequencia. Contem <code>process_item()</code> e <code>StepTimer</code>.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-core">Core</div>
+      <h4>verify_and_fix.py</h4>
+      <p>Verificacao e correcao pos-execucao. Compara dados no Klassmatt com o Excel, corrige divergencias automaticamente.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-core">Core</div>
+      <h4>config.py</h4>
+      <p>Toda a configuracao: URLs, timeouts, mapeamento de colunas do Excel, seletores CSS do ASP.NET.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-core">Core</div>
+      <h4>browser.py</h4>
+      <p>Setup do Playwright + helpers: <code>safe_click</code> (com fallback JS), <code>hide_overlays</code>, verificacao de sessao, dismiss de popups.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-core">Core</div>
+      <h4>excel_handler.py</h4>
+      <p>Leitura do Excel via openpyxl. Detecta cabecalho, mapeia 30 atributos dinamicos. Colore celulas (verde/vermelho/laranja).</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-util">Util</div>
+      <h4>state.py</h4>
+      <p>Persistencia JSON (<code>progress.json</code>). Salva status de cada SIN: ok, error, skipped, needs_review.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-util">Util</div>
+      <h4>logger.py</h4>
+      <p>Logging dual: arquivo (DEBUG) + console (INFO). Arquivo UTF-8 para evitar problemas com caracteres especiais no Windows.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-util">Util</div>
+      <h4>fix_ncm.py</h4>
+      <p>Script standalone para corrigir formato NCM em itens ja processados. Faz Retornar Etapa &rarr; NCM &rarr; Remeter.</p>
+    </div>
+  </div>
+
+  <h3>Page Objects (pages/)</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>item.py</h4>
+      <p>Busca SIN no grid, seleciona via <code>abreSIN()</code> JS, cria item se necessario, detecta status.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>worklist.py</h4>
+      <p>Navegacao ate a Worklist, filtro select2 "Todas as Solicitacoes", chamada <code>pesquisar()</code>.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>classifications.py</h4>
+      <p>UNSPSC via popup de busca. Timeout curto (5s) no botao para fail-fast ao fallback JS.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>fiscal.py</h4>
+      <p>NCM: formata XXXXXXXX &rarr; XXXX.XX.XX, valida apos fill, limpa se rejeitado.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>references.py</h4>
+      <p>Empresa + Part Number. Autocomplete com fallbacks. <code>#iButAddRef</code> (novo) vs <code>Imagebutton22</code> (editar).</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>relationships.py</h4>
+      <p>Codigo Antigo (tipo/status/comentario). Detecta duplicatas antes de inserir.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>media.py</h4>
+      <p>Upload de PDFs. Nova aba do browser. Fallback triplo para "Adicionar Midia".</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>descriptions.py</h4>
+      <p>Validacao SAP (tam &gt; 40), troca de PDM via DescricaoV3.aspx.</p>
+    </div>
+    <div class="card">
+      <div class="tag tag-page">Page</div>
+      <h4>attributes.py</h4>
+      <p>Ate 30 atributos tecnicos via popup de arvore taxonomica com navegacao por letras A-Z.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ -->
+<section id="status">
+  <h2>Status dos Itens</h2>
+
+  <h3>Ciclo de Vida no Klassmatt</h3>
+  <div class="diagram">
+    <div class="status-flow">
+      <div class="sf-node" style="background:rgba(96,165,250,0.15);color:var(--blue)">CATALOGACAO-MODEC</div>
+      <div class="sf-arrow">&rarr;</div>
+      <div class="sf-node" style="background:rgba(52,211,153,0.15);color:var(--green)">FINALIZACAO</div>
+      <div class="sf-arrow">&rarr;</div>
+      <div class="sf-node" style="background:rgba(251,191,36,0.15);color:var(--yellow)">APROVACAO-TECNICA</div>
+      <div class="sf-arrow">&rarr;</div>
+      <div class="sf-node" style="background:rgba(167,139,250,0.15);color:var(--purple)">CATALOGACAO-MODEC (final)</div>
+    </div>
+    <p style="text-align:center;margin-top:1rem;color:var(--text2);font-size:0.85rem">O bot so edita itens em <strong>FINALIZACAO</strong>. Itens em APROVACAO-TECNICA precisam de "Retornar Etapa" para voltar.</p>
+  </div>
+
+  <h3>Status no progress.json (main.py)</h3>
+  <table>
+    <tr><th>Status</th><th>Significado</th><th>Proximo passo</th></tr>
+    <tr><td><span class="badge badge-ok">ok</span></td><td>Todos os campos preenchidos sem problemas</td><td>Nenhum</td></tr>
+    <tr><td><span class="badge badge-review">needs_review</span></td><td>Completou mas com warnings (NCM rejeitado, UNSPSC nao encontrado, atributos incompletos)</td><td>Rodar verify_and_fix.py ou corrigir manualmente</td></tr>
+    <tr><td><span class="badge badge-error">error</span></td><td>Falhou apos 3 tentativas</td><td>Reprocessar (rodar novamente o bot)</td></tr>
+    <tr><td><span class="badge badge-skip">skipped</span></td><td>Item nao editavel (status != FINALIZACAO) ou sem documentos</td><td>Verificar status no Klassmatt</td></tr>
+  </table>
+
+  <h3>Status no verify_report.json (verify_and_fix.py)</h3>
+  <table>
+    <tr><th>Status</th><th>Significado</th><th>Qtd</th></tr>
+    <tr><td><span class="badge badge-ok">ok</span></td><td>Dados no Klassmatt batem com o Excel</td><td>371</td></tr>
+    <tr><td><span class="badge badge-fix">corrigido</span></td><td>Tinha divergencia, correcao aplicada com sucesso</td><td>230</td></tr>
+    <tr><td><span class="badge badge-error">fix_failed</span></td><td>Tentou corrigir mas falhou (268 estao em APROVACAO-TECNICA, nao editaveis)</td><td>285</td></tr>
+    <tr><td><span class="badge badge-partial">parcial</span></td><td>Parte corrigida, parte nao (maioria: referencia nao salva)</td><td>88</td></tr>
+    <tr><td><span class="badge badge-div">divergente</span></td><td>Dados diferentes, nao auto-corrigiveis (todas sao divergencias de referencia)</td><td>18</td></tr>
+    <tr><td><span class="badge badge-error">error</span></td><td>Erro durante verificacao/correcao</td><td>17</td></tr>
+  </table>
+</section>
+
+<!-- ============================================ -->
+<section id="verify">
+  <h2>Verify & Fix</h2>
+  <p>O <code>verify_and_fix.py</code> e o script de pos-processamento. Ele abre cada SIN no Klassmatt, compara os dados preenchidos com o que esta no Excel, e tenta corrigir divergencias automaticamente.</p>
+
+  <h3>O que ele verifica</h3>
+  <ul>
+    <li><strong>UNSPSC</strong> &mdash; codigo de classificacao</li>
+    <li><strong>NCM</strong> &mdash; codigo fiscal (formato XXXX.XX.XX)</li>
+    <li><strong>Referencia</strong> &mdash; empresa + part number</li>
+    <li><strong>Relacionamento</strong> &mdash; codigo antigo</li>
+    <li><strong>PDM</strong> &mdash; padrao de material</li>
+    <li><strong>Atributos</strong> &mdash; ate 30 atributos tecnicos</li>
+    <li><strong>Midias</strong> &mdash; quantidade de documentos uploaded</li>
+  </ul>
+
+  <h3>Como usar</h3>
+  <pre>python verify_and_fix.py                         # todos os SINs da planilha
+python verify_and_fix.py 474284 474291           # SINs especificos
+python verify_and_fix.py --file=lista.txt        # SINs de um arquivo (um por linha)
+python verify_and_fix.py --only-divergent        # re-processa somente os que falharam no report
+python verify_and_fix.py --verify-only           # so verifica, nao corrige nada
+
+run_verify.bat                                   # com auto-restart em caso de crash
+run_verify.bat --verify-only                     # verify only com auto-restart</pre>
+
+  <h3>Resultado da ultima execucao (27/03/2026)</h3>
+  <div class="diagram">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+      <div>
+        <h4 style="color:var(--green);margin-bottom:0.5rem">Resolvidos (601 / 59.6%)</h4>
+        <ul>
+          <li>371 ja estavam OK</li>
+          <li>230 foram corrigidos automaticamente</li>
+        </ul>
+      </div>
+      <div>
+        <h4 style="color:var(--red);margin-bottom:0.5rem">Pendentes (408 / 40.4%)</h4>
+        <ul>
+          <li>285 fix_failed (268 em APROVACAO-TECNICA)</li>
+          <li>88 parciais (36 com referencia pendente)</li>
+          <li>18 divergentes (referencia diferente)</li>
+          <li>17 erros (9 por erro de pagina apos Finalizar)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <h3>Campos mais divergentes nos fix_failed</h3>
+  <table>
+    <tr><th>Campo</th><th>Ocorrencias</th><th>Nota</th></tr>
+    <tr><td>UNSPSC</td><td>243</td><td>Codigo nao bate ou nao preenchido</td></tr>
+    <tr><td>NCM</td><td>166</td><td>Formato ou codigo rejeitado pelo sistema</td></tr>
+    <tr><td>Midias</td><td>85</td><td>Documentos nao uploadados (timeout)</td></tr>
+    <tr><td>Referencia</td><td>25</td><td>Empresa/part number nao salvo</td></tr>
+    <tr><td>Relacionamento</td><td>20</td><td>Codigo antigo nao inserido</td></tr>
+  </table>
+</section>
+
+<!-- ============================================ -->
+<section id="armadilhas">
+  <h2>Armadilhas e Padroes Importantes</h2>
+
+  <div class="callout callout-danger">
+    <div class="callout-title">Overlay div1 &mdash; O problema #1</div>
+    O Klassmatt tem um <code>&lt;div id="div1"&gt;</code> (painel de descricao) que fica invisivel mas <strong>por cima</strong> de tabs e botoes. Cliques do Playwright sao interceptados silenciosamente &mdash; o click parece funcionar, mas nada acontece.<br><br>
+    <strong>Solucao:</strong> Sempre chamar <code>hide_overlays(page)</code> ANTES de clicar em tabs. Se o click falhar, usar <code>page.evaluate("el => el.click()")</code> como fallback JS. A funcao <code>safe_click()</code> ja faz isso automaticamente.
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-title">IDs ASP.NET sao diferentes do name</div>
+    O atributo <code>name</code> usa hierarquia completa (<code>ctl00$Body$tabFiscal$txtNCMTIPI</code>), mas o <code>id</code> renderizado e curto (<code>txtNCMTIPI</code>). Sempre usar o <code>id</code> para seletores CSS. IDs sao <strong>case-sensitive</strong> (<code>Imagebutton7</code> != <code>imagebutton7</code>).
+  </div>
+
+  <div class="callout callout-warn">
+    <div class="callout-title">Rate Limiting do Klassmatt</div>
+    Navegar rapido demais causa "Ocorreu uma excecao". O bot usa delay de 5s entre itens e espera <code>pesquisar()</code> estar definida antes de buscar o proximo SIN.
+  </div>
+
+  <div class="callout callout-warn">
+    <div class="callout-title">Idempotencia obrigatoria</div>
+    Cada passo precisa verificar se ja foi feito antes de tentar fazer. Itens podem ser reprocessados apos erros. Exemplos: verificar contagem de referencias antes de adicionar, verificar contagem de midias na aba antes de upload, verificar se NCM ja esta preenchido.
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-title">Sessao expira</div>
+    O Klassmatt desconecta apos inatividade. O bot detecta isso via <code>verificar_sessao()</code> e pausa para re-login manual. O <code>playwright_profile/</code> persiste cookies, mas a sessao do servidor expira.
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-title">Tabs abrem em nova janela</div>
+    A aba "Midias" abre em uma nova aba do browser (via <code>OpenNewTab()</code> JS). O bot detecta isso checando <code>page.context.pages</code>. O botao "Fechar" da aba Midias (<code>cmdFechar</code>) destrói a pagina imediatamente &mdash; precisa de try/except.
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-title">dgDadosTecnicos fica em DescricaoV3</div>
+    A tabela de atributos tecnicos NAO fica na pagina principal do item (<code>ITEM_Edita.aspx</code>). Fica em <code>ITEM_Edita_DescricaoV3.aspx</code>, acessivel via Descricoes &rarr; Editar Descricao. So aparece apos definir um PDM.
+  </div>
+</section>
+
+<!-- ============================================ -->
+<section id="comandos">
+  <h2>Comandos Uteis</h2>
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab(event, 'tab-run')">Execucao</button>
+    <button class="tab-btn" onclick="switchTab(event, 'tab-verify')">Verificacao</button>
+    <button class="tab-btn" onclick="switchTab(event, 'tab-setup')">Setup</button>
+  </div>
+
+  <div id="tab-run" class="tab-content active">
+    <pre><span style="color:var(--text2)"># Rodar o bot principal (preenche itens)</span>
+python main.py
+
+<span style="color:var(--text2)"># Com auto-restart (recomendado para producao)</span>
+run_main.bat
+
+<span style="color:var(--text2)"># Fix NCM em itens ja processados</span>
+python fix_ncm.py</pre>
+    <p style="font-size:0.85rem;color:var(--text2)">O <code>run_main.bat</code> mata todos os processos Chrome antes de iniciar e reinicia automaticamente em caso de crash (ate 100x, delay de 15s).</p>
+  </div>
+
+  <div id="tab-verify" class="tab-content">
+    <pre><span style="color:var(--text2)"># Verificar e corrigir todos</span>
+python verify_and_fix.py
+
+<span style="color:var(--text2)"># Somente verificar (sem correcoes)</span>
+python verify_and_fix.py --verify-only
+
+<span style="color:var(--text2)"># SINs especificos</span>
+python verify_and_fix.py 474284 474291
+
+<span style="color:var(--text2)"># SINs de um arquivo</span>
+python verify_and_fix.py --file=lista.txt
+
+<span style="color:var(--text2)"># Reprocessar somente os divergentes do ultimo report</span>
+python verify_and_fix.py --only-divergent
+
+<span style="color:var(--text2)"># Com auto-restart</span>
+run_verify.bat --verify-only</pre>
+  </div>
+
+  <div id="tab-setup" class="tab-content">
+    <pre><span style="color:var(--text2)"># Instalar dependencias</span>
+pip install -r requirements.txt
+python -m playwright install chromium
+
+<span style="color:var(--text2)"># Primeiro uso: rode o bot e faca login manual</span>
+<span style="color:var(--text2)"># A sessao sera salva em ./playwright_profile/</span>
+python main.py
+
+<span style="color:var(--text2)"># Configurar variaveis no .env</span>
+<span style="color:var(--text2)"># EXCEL_PATH, DOCUMENTS_DIR, PROFILE_DIR, etc.</span></pre>
+  </div>
+
+  <h3 style="margin-top:2rem">Arquivos de Dados</h3>
+  <table>
+    <tr><th>Arquivo</th><th>O que contem</th></tr>
+    <tr><td><code>progress.json</code></td><td>Status de cada SIN processado pelo main.py (ok, error, skipped, needs_review)</td></tr>
+    <tr><td><code>verify_report.json</code></td><td>Resultado detalhado do verify_and_fix (diffs, campos corrigidos, warnings)</td></tr>
+    <tr><td><code>klassmatt_rpa.log</code></td><td>Log completo local (DEBUG level)</td></tr>
+    <tr><td><code>.env</code></td><td>Configuracoes (caminhos, browser, timeouts)</td></tr>
+    <tr><td><code>playwright_profile/</code></td><td>Sessao do browser (cookies, cache)</td></tr>
+  </table>
+</section>
+
+<!-- FOOTER -->
+<div style="text-align:center;padding:3rem 0;color:var(--text2);font-size:0.8rem;border-top:1px solid var(--border);margin-top:2rem">
+  Klassmatt RPA &mdash; VM .110 &mdash; Gerado em 27/03/2026
+</div>
+
+</div><!-- /container -->
+
+<script>
+function switchTab(e, tabId) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  e.target.classList.add('active');
+  document.getElementById(tabId).classList.add('active');
+}
+</script>
+</body>
+</html>
