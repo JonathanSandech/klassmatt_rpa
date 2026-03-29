@@ -9,6 +9,27 @@ from browser import safe_click
 from logger import log
 
 
+def _normalize_value(value: str) -> str:
+    """Normaliza variantes conhecidas de valores de atributos.
+
+    Corrige typos recorrentes e variações de grafia encontradas
+    nas planilhas vs. árvore de taxonomia do Klassmatt.
+    """
+    v = value.strip().upper()
+    # Variantes comuns de grafia
+    replacements = {
+        "PLUGE ": "PLUGUE ",
+        "PLUGE$": "PLUGUE",
+    }
+    for old, new in replacements.items():
+        if old.endswith("$"):
+            if v.endswith(old[:-1]):
+                v = v[: -len(old) + 1] + new
+        else:
+            v = v.replace(old, new)
+    return v
+
+
 def _attr_ctl_index(loop_index: int) -> str:
     """Converte índice do loop (1-based) para formato ASP.NET ctl{nn}.
 
@@ -185,6 +206,16 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
 
     # Finalizar para persistir os atributos (sem Finalizar, valores são perdidos)
     _finalizar_ok = True
+
+    # FIX: Se a URL tem IdItem=0 (bug do Klassmatt após "Definir Padrão"),
+    # corrigir o form action removendo IdItem=0 antes do Finalizar.
+    if "ITEM_Edita_DescricaoV3" in page.url and "IdItem=0" in page.url:
+        log.info("Detectado IdItem=0 na URL — corrigindo form action antes de Finalizar")
+        await page.evaluate("""() => {
+            const form = document.querySelector('form');
+            if (form) form.action = form.action.replace('IdItem=0&', '').replace('&IdItem=0', '').replace('IdItem=0', '');
+        }""")
+
     if "ITEM_Edita_DescricaoV3" in page.url:
         import browser as _browser
         _browser.last_dialog_message = ""
@@ -202,8 +233,13 @@ async def fill_attributes(page: Page, attributes: list) -> bool:
                     pass
             await page.wait_for_timeout(500)
 
+            # FIX: Verificar se caiu em Erro.aspx (NullReferenceException por IdItem=0)
+            if "Erro.aspx" in page.url:
+                log.error("Finalizar caiu em Erro.aspx (provável IdItem=0) — atributos NÃO salvos")
+                _finalizar_ok = False
+
             # Verificar se Finalizar foi rejeitado
-            if "ITEM_Edita_DescricaoV3" in page.url:
+            elif "ITEM_Edita_DescricaoV3" in page.url:
                 last_msg = _browser.last_dialog_message.lower()
                 if "preencher" in last_msg or "verificar" in last_msg or "dados técnicos" in last_msg:
                     log.warning(f"Finalizar rejeitado: '{_browser.last_dialog_message}' — atributos não salvos")
@@ -313,6 +349,12 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         except Exception:
             log.warning("Nós da árvore não apareceram após 10s — tentando mesmo assim")
         await popup_page.wait_for_timeout(500)
+
+        # Normalizar valor antes de buscar na árvore
+        normalized = _normalize_value(value)
+        if normalized != value.strip().upper():
+            log.info(f"Atributo normalizado: '{value}' -> '{normalized}'")
+            value = normalized
 
         first_letter = value[0].upper()
         # Valores que começam com dígito ficam sob o nó "[0-9]" na árvore
@@ -424,7 +466,7 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
                     }
                 }
 
-                // 5. "most words match" — find node with most matching words (minimum 60%)
+                // 5. "most words match" — find node with most matching words (minimum 50%)
                 //    On tie, prefer shorter node text (closer to search value)
                 if (!target) {
                     const words = upper.split(/\\s+/).filter(w => w.length > 2);
@@ -438,7 +480,7 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
                             const score = matchCount / words.length;
                             const lenDiff = Math.abs(nodeText.length - upper.length);
                             if (score > bestScore || (score === bestScore && lenDiff < bestLen)) {
-                                if (score >= 0.6) {
+                                if (score >= 0.5) {
                                     bestScore = score;
                                     bestMatch = node;
                                     bestLen = lenDiff;
@@ -449,6 +491,44 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
                             target = bestMatch;
                             matchType = 'best-word-match(' + Math.round(bestScore * 100) + '%)';
                         }
+                    }
+                }
+
+                // 6. Levenshtein distance — find closest match (max distance = 30% of value length)
+                if (!target) {
+                    function levenshtein(a, b) {
+                        const m = a.length, n = b.length;
+                        if (m === 0) return n;
+                        if (n === 0) return m;
+                        let prev = Array.from({length: n + 1}, (_, i) => i);
+                        for (let i = 1; i <= m; i++) {
+                            let curr = [i];
+                            for (let j = 1; j <= n; j++) {
+                                curr[j] = a[i-1] === b[j-1]
+                                    ? prev[j-1]
+                                    : 1 + Math.min(prev[j-1], prev[j], curr[j-1]);
+                            }
+                            prev = curr;
+                        }
+                        return prev[n];
+                    }
+                    const maxDist = Math.max(3, Math.floor(upper.length * 0.3));
+                    let bestDist = Infinity;
+                    let bestNode = null;
+                    for (const node of nodes) {
+                        const nodeText = node.innerText.trim().toUpperCase();
+                        if (nodeText.length <= 2) continue;
+                        // Skip if length difference alone exceeds threshold
+                        if (Math.abs(nodeText.length - upper.length) > maxDist) continue;
+                        const dist = levenshtein(upper, nodeText);
+                        if (dist < bestDist && dist <= maxDist) {
+                            bestDist = dist;
+                            bestNode = node;
+                        }
+                    }
+                    if (bestNode) {
+                        target = bestNode;
+                        matchType = 'levenshtein(dist=' + bestDist + ')';
                     }
                 }
 

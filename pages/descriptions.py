@@ -273,6 +273,21 @@ async def change_pdm(page: Page, pdm: str) -> bool:
         log.info("PDM já definido (atributos reais presentes) — pulando")
         return True
 
+    # Salvar o IdItem ANTES de navegar para Pesquisa_Item.aspx
+    # (necessário porque Definir Padrão volta com IdItem=0, causando NullReferenceException)
+    id_item = await page.evaluate(
+        """() => {
+            const url = window.location.href;
+            const m = url.match(/IdItem=(\\d+)/i);
+            if (m && m[1] !== '0') return m[1];
+            // Fallback: buscar no body text
+            const body = document.body.innerText;
+            const m2 = body.match(/IdItem:\\s*(\\d+)/);
+            return m2 ? m2[1] : null;
+        }"""
+    )
+    log.debug(f"IdItem capturado antes de Alterar Padrão: {id_item}")
+
     # Aguardar botão "Alterar Padrão"
     alterar_btn = page.locator(SELECTORS["alterar_padrao_btn"])
     try:
@@ -360,9 +375,57 @@ async def change_pdm(page: Page, pdm: str) -> bool:
             log.warning(f"Não voltou para DescricaoV3 após Definir Padrão (URL={page.url})")
     await page.wait_for_timeout(1000)
 
-    # NÃO clicar Finalizar aqui — Finalizar sem atributos preenchidos não salva o PDM.
-    # O Finalizar será feito pelo fill_attributes() após preencher os atributos,
-    # o que persiste PDM + atributos juntos.
+    # FIX: "Definir Padrão" retorna com IdItem=0 na URL, o que causa
+    # NullReferenceException ao clicar Finalizar. Solução: voltar para
+    # ITEM_Edita.aspx e re-entrar na DescricaoV3 pelo fluxo normal,
+    # que gera a URL com o IdItem correto.
+    if "IdItem=0" in page.url or "ITEM_AlterarPD=1" in page.url:
+        log.info("URL com IdItem=0 detectada — re-navegando via fluxo normal")
+
+        # Voltar à SIN
+        voltar_btn = page.locator("#butSIN_Voltar")
+        if await voltar_btn.count() > 0:
+            await voltar_btn.click()
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
+
+        # Clicar "Atuar no Item" se estamos no resumo da SIN
+        atuar = await page.evaluate("""() => {
+            const btn = document.querySelector("input[value='Atuar no Item']");
+            if (btn && !btn.disabled) { btn.click(); return true; }
+            return false;
+        }""")
+        if atuar:
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
+            await hide_overlays(page)
+
+        # Navegar Descrições → Editar Descrição
+        if "ITEM_Edita.aspx" in page.url:
+            await page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                const div1 = document.getElementById('div1');
+                if (div1) div1.style.display = 'none';
+                __doPostBack('ctl00$Body$dlTab$ctl01$lbutMenu', '');
+            }""")
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
+            await hide_overlays(page)
+
+            await page.evaluate("""() => {
+                window.confirm = () => true;
+                window.alert = () => {};
+                __doPostBack('ctl00$Body$tabDescricoes$lbutAlterarDescr', '');
+            }""")
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(1000)
+
+        if "ITEM_Edita_DescricaoV3" in page.url and "IdItem=0" not in page.url:
+            log.info(f"Re-navegação bem-sucedida: {page.url}")
+        else:
+            log.warning(f"Re-navegação falhou, URL atual: {page.url}")
+            return False
 
     log.info(f"PDM alterado para: {pdm} / {found_cat}")
     return True
