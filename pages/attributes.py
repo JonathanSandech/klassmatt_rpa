@@ -343,7 +343,7 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         # Esperar que a árvore renderize seus nós (ASP.NET TreeView usa JS client-side)
         try:
             await popup_page.wait_for_selector(
-                "a.nodeStyle, a.nodeStyleSel, a[class*='nodeStyle']",
+                "#tvDadosTecnicos a",
                 timeout=10_000,
             )
         except Exception:
@@ -366,18 +366,12 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         # O click causa full page reload — precisamos esperar a nova página carregar
         letter_found = await popup_page.evaluate(
             """(letter) => {
-                // Tentar múltiplos seletores para encontrar a letra
-                const selectors = [
-                    'a.nodeStyle', 'a.nodeStyleSel',
-                    'a[class*="nodeStyle"]', 'a[class*="NodeStyle"]'
-                ];
-                for (const sel of selectors) {
-                    const nodes = document.querySelectorAll(sel);
-                    const letterNode = Array.from(nodes).find(a => a.innerText.trim() === letter);
-                    if (letterNode) {
-                        letterNode.click();
-                        return true;
-                    }
+                // Use broad selector — CSS class names vary across ASP.NET TreeView configs
+                const nodes = document.querySelectorAll('#tvDadosTecnicos a');
+                const letterNode = Array.from(nodes).find(a => a.innerText.trim() === letter);
+                if (letterNode) {
+                    letterNode.click();
+                    return true;
                 }
                 return false;
             }""",
@@ -391,14 +385,14 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
             except Exception:
                 pass
             await popup_page.wait_for_load_state("networkidle", timeout=15_000)
-            # Esperar nós filhos renderizarem após o postback
-            await popup_page.wait_for_timeout(2000)
+            # Esperar nós filhos renderizarem após o postback (árvores grandes precisam 3s+)
+            await popup_page.wait_for_timeout(3000)
         else:
             # Listar o que está disponível para debug
             available = await popup_page.evaluate(
                 """() => {
-                    const nodes = document.querySelectorAll('a.nodeStyle, a.nodeStyleSel, a[class*="nodeStyle"]');
-                    return Array.from(nodes).map(a => a.innerText.trim()).slice(0, 30);
+                    const nodes = document.querySelectorAll('#tvDadosTecnicos a');
+                    return Array.from(nodes).map(a => a.innerText.trim()).filter(t => t.length > 0).slice(0, 30);
                 }"""
             )
             log.warning(f"Letra '{first_letter}' não encontrada na árvore. Nós disponíveis: {available}")
@@ -407,12 +401,21 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
         # Usar evaluate pois pode haver milhares de nós (1900+)
         found = await popup_page.evaluate(
             """(value) => {
-                // Filter out collapsed sub-nodes (e.g. PORCA under PARAFUSO)
-                // Collapsed nodes have offsetParent===null or offsetHeight===0 (display:none)
-                // but offscreen nodes (below scroll) still have offsetHeight > 0
-                const allNodes = document.querySelectorAll('a.nodeStyle, a.nodeStyleSel');
-                const nodes = Array.from(allNodes).filter(a => {
-                    return a.offsetHeight > 0;
+                // Use broad selector — 'a.nodeStyle' misses many nodes in ASP.NET TreeView.
+                // '#tvDadosTecnicos a' captures all tree links reliably.
+                const allLinks = document.querySelectorAll('#tvDadosTecnicos a');
+                // Filter: keep only value nodes (skip alphabet letters, root node, collapse/expand icons)
+                const nodes = Array.from(allLinks).filter(a => {
+                    if (a.offsetHeight === 0) return false;  // collapsed/hidden
+                    const text = a.innerText.trim();
+                    if (!text || text.length === 0) return false;
+                    // Skip single-char alphabet letters and [0-9]
+                    if (text.length <= 1) return false;
+                    if (text === '[0-9]') return false;
+                    // Skip root-level DT names (NOME VALIDO, MATERIAL, etc.)
+                    const href = a.getAttribute('href') || '';
+                    if (href.includes('Collapse') || href.includes('Expand')) return false;
+                    return true;
                 });
                 const upper = value.toUpperCase().trim();
 
@@ -564,8 +567,11 @@ async def _open_and_fill_tree_popup(page: Page, ctl_idx: str, value: str) -> Non
             # Listar valores disponíveis para debug
             available = await popup_page.evaluate(
                 """() => {
-                    const nodes = document.querySelectorAll('a.nodeStyle, a.nodeStyleSel');
-                    return Array.from(nodes).map(a => a.innerText.trim()).slice(0, 20);
+                    const nodes = document.querySelectorAll('#tvDadosTecnicos a');
+                    return Array.from(nodes)
+                        .map(a => a.innerText.trim())
+                        .filter(t => t.length > 1 && t !== '[0-9]')
+                        .slice(0, 20);
                 }"""
             )
             log.warning(f"Valor '{value}' não encontrado na árvore após expandir '{first_letter}'. Disponíveis: {available}")
